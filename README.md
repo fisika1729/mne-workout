@@ -1,26 +1,63 @@
 # MNE-Python Data Analyzer
 
-A comprehensive Python application suite for analyzing MRI/EEG data using the MNE-Python library. Supports **multi-modal analysis** with correlation between structural (MRI) and functional (EEG) brain data.
+A comprehensive Python application suite for analyzing neuroimaging data using the MNE-Python library. Features **adaptive multi-modal analysis** that automatically works with any combination of EEG, MEG, MRI, fMRI, and contrast MRI data.
 
 ## Tools Included
 
-### 1. Basic EEG Analyzer (`mri_analysis.py`)
+### 1. **Adaptive Multi-Modal Analyzer** (`adaptive_multimodal.py`) ⭐ **RECOMMENDED**
+**Revolutionary adaptive system that works with ANY combination of imaging modalities!**
+
+- ✅ **Load any combination**: EEG, MEG, MRI, fMRI, cMRI
+- ✅ **Automatic analysis**: System adapts to what you load
+- ✅ **No rigid format requirements**: Works with 1, 2, 3, 4, or all 5 modalities
+- ✅ **Smart feature extraction**: Type-specific and automatic
+- ✅ **Cross-modal correlations**: Analyzes all possible pairs
+- ✅ **Dynamic UI**: Interface adapts to loaded data
+
+**Example**: Load only EEG+MRI → System runs EEG-MRI analysis
+**Example**: Load EEG+MEG+fMRI → System runs all 3 pairwise correlations + multivariate analysis
+
+### 2. Multi-Modal Analyzer (`multimodal_analysis.py`)
+- Fixed EEG + MRI analysis
+- Linear and non-linear correlation analysis
+- Comprehensive visualization
+
+### 3. Basic EEG Analyzer (`mri_analysis.py`)
 - Single-modality EEG/MEG analysis
 - EEGLAB .set format support
 - Quick visualization and basic analysis
 
-### 2. Multi-Modal Analyzer (`multimodal_analysis.py`) ⭐ **NEW**
-- **Supports both MRI and EEG data**
-- **Multiple file formats** (EEGLAB, FIF, EDF, NIfTI, etc.)
-- **Correlation analysis** between MRI structure and EEG function
-- **Advanced visualizations** with statistical significance testing
-
-### 3. Command-Line Tool (`example_usage.py`)
+### 4. Command-Line Tool (`example_usage.py`)
 - Batch processing
 - Automated report generation
 - Scriptable analysis
 
+## Supported Neuroimaging Modalities
+
+The adaptive system supports **5 neuroimaging modalities**:
+
+| Modality | Full Name | What It Measures | Formats |
+|----------|-----------|------------------|---------|
+| **EEG** | Electroencephalography | Electrical brain activity | .set, .fif, .edf, .bdf, .vhdr |
+| **MEG** | Magnetoencephalography | Magnetic brain fields | .fif, .ds, .sqd |
+| **MRI** | Structural MRI | Brain anatomy | .nii, .nii.gz, .mgz, .mgh |
+| **fMRI** | Functional MRI | BOLD activation | .nii (4D) |
+| **cMRI** | Contrast-enhanced MRI | Enhanced anatomy | .nii, .dcm |
+
+**Load any combination** - the system automatically adapts!
+
 ## Features
+
+### Adaptive System Features 🚀
+
+- **Modality Detection**: Automatically identifies what data you've loaded
+- **Smart Analysis Selection**: Runs appropriate analyses based on available data
+- **Cross-Modal Correlation Matrix**: N×N matrix for N loaded modalities
+- **Feature Extraction**: Type-specific feature extraction for each modality
+- **Dynamic UI**: Tabs and buttons appear only for loaded data
+- **No Manual Configuration**: Just load and click "Auto-Analyze"
+- **Robust to Missing Data**: Works with 1 to 5 modalities
+- **Extensible**: Easy to add new modality types
 
 ### Basic Features
 - **File Browser**: Easy-to-use tkinter-based file selection dialog
@@ -83,6 +120,58 @@ pip install mne numpy scipy matplotlib pandas scikit-learn seaborn
 ```
 
 ## Usage
+
+### Running the Adaptive Multi-Modal Analyzer 🚀 **RECOMMENDED**
+
+For flexible multi-modal analysis that adapts to your data:
+```bash
+python adaptive_multimodal.py
+```
+
+**Simple Workflow (Works with ANY combination)**:
+1. **Load Data**: Click "Load" buttons for the modalities you have
+   - Have EEG? Click "Load" under EEG
+   - Have MRI? Click "Load" under MRI
+   - Have fMRI? Click "Load" under fMRI
+   - ... (any combination!)
+
+2. **Auto-Analyze**: Click the "🔍 Auto-Analyze" button
+   - System automatically detects what you loaded
+   - Runs appropriate analyses
+   - Creates visualizations
+
+3. **View Results**: Check the generated tabs
+   - Each modality gets its own visualization tab
+   - "Cross-Modal" tab shows correlation matrix
+   - "Overview" tab summarizes everything
+
+**Example Scenarios**:
+
+**Scenario 1: Just EEG**
+```
+Load: EEG only
+Result: Single-modality analysis, spectral features, complexity
+```
+
+**Scenario 2: EEG + MRI**
+```
+Load: EEG + MRI
+Result: Cross-modal correlation, spectral-spatial analysis
+```
+
+**Scenario 3: EEG + MEG + fMRI**
+```
+Load: EEG + MEG + fMRI
+Result: 3×3 correlation matrix, all pairwise analyses
+```
+
+**Scenario 4: All Five Modalities**
+```
+Load: EEG + MEG + MRI + fMRI + cMRI
+Result: 5×5 correlation matrix, comprehensive multi-modal analysis
+```
+
+**Key Advantage**: The same tool works for ALL scenarios - no need to pick different scripts!
 
 ### Running the Basic EEG Analyzer
 
@@ -250,6 +339,7 @@ The multi-modal analyzer finds correlations between:
 3. **Quality Control**: Verify data integrity across modalities
 
 **For detailed guides:**
+- **Adaptive system**: [`ADAPTIVE_SYSTEM.md`](ADAPTIVE_SYSTEM.md) 🚀 **NEW**
 - Linear correlation analysis: [`MULTIMODAL_ANALYSIS.md`](MULTIMODAL_ANALYSIS.md)
 - Non-linear dynamics: [`NONLINEAR_DYNAMICS.md`](NONLINEAR_DYNAMICS.md) 🔬
 
