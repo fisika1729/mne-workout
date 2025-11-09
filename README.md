@@ -36,16 +36,26 @@ A comprehensive Python application suite for analyzing MRI/EEG data using the MN
 - **Multi-Format Support**:
   - **EEG**: .set (EEGLAB), .fif (MNE), .edf, .bdf, .vhdr (BrainVision)
   - **MRI**: .nii/.nii.gz (NIfTI), .mgz/.mgh (FreeSurfer)
-- **Correlation Analysis**:
+- **Linear Correlation Analysis**:
   - Spectral-spatial correlations (EEG frequency bands vs MRI regions)
   - Statistical significance testing (p-values)
   - Feature extraction from both modalities
+- **Non-Linear Dynamics Analysis** 🔬 **NEW**:
+  - **Entropy measures**: Shannon, Sample, Approximate entropy
+  - **Fractal dimensions**: Higuchi FD, Correlation dimension
+  - **Chaos indicators**: Lyapunov exponent, DFA
+  - **Mutual Information**: Detects non-linear dependencies
+  - **Phase Synchronization**: Band-specific oscillatory coupling
+  - **Transfer Entropy**: Directional information flow
+  - **Cross-Recurrence**: State-space similarity
 - **Advanced Visualizations**:
   - EEG band power analysis (Delta, Theta, Alpha, Beta, Gamma)
   - MRI 3D slice viewing (Sagittal, Coronal, Axial)
-  - Correlation heatmaps and scatter plots
+  - Linear correlation heatmaps and scatter plots
+  - Non-linear dynamics dashboard (9-panel visualization)
   - Channel connectivity matrices
-- **Find Similarities**: Automatically identifies correlations between brain structure and function
+  - Complexity and chaos indicators
+- **Find Similarities**: Automatically identifies both linear and non-linear relationships
 
 ## Installation
 
@@ -89,23 +99,42 @@ chmod +x mri_analysis.py
 
 ### Running the Multi-Modal Analyzer ⭐ **RECOMMENDED**
 
-For MRI/EEG correlation analysis:
+For MRI/EEG correlation and non-linear dynamics analysis:
 ```bash
 python multimodal_analysis.py
 ```
 
-**Workflow:**
+**Workflow for Linear Analysis:**
 1. Click "Load EEG" → Select your EEG file (any supported format)
 2. Click "Load MRI" → Select your MRI file (.nii, .mgz, etc.)
-3. Click "Correlate" → Computes correlations between MRI and EEG
-4. View results in "Correlation Analysis" tab
+3. Click "Linear Corr" → Computes linear correlations between MRI and EEG
+4. View results in "Linear Correlation" tab
 
-**What it does:**
+**Workflow for Non-Linear Analysis:** 🔬
+1. Load both EEG and MRI data (as above)
+2. Click "Non-Linear" → Computes non-linear dynamics metrics
+3. View results in "Non-Linear Dynamics" tab
+4. Check "Data Info" tab for detailed metric explanations
+
+**What Linear Analysis does:**
 - Extracts EEG frequency band power (Delta, Theta, Alpha, Beta, Gamma)
 - Divides MRI into regions and computes intensity statistics
-- Correlates EEG spectral features with MRI spatial features
+- Correlates EEG spectral features with MRI spatial features (Pearson)
 - Displays statistical significance (p-values)
 - Shows which brain regions correlate with specific EEG frequencies
+
+**What Non-Linear Analysis does:** 🔬
+- Computes **15+ non-linear metrics**:
+  - Entropy (Shannon, Sample, Approximate)
+  - Fractal dimensions (Higuchi, Correlation)
+  - Chaos indicators (Lyapunov exponent, DFA)
+  - Mutual Information (non-linear dependency)
+  - Phase Synchronization Index (per frequency band)
+  - Transfer Entropy (directional information flow)
+  - Cross-recurrence quantification
+- Creates **9-panel visualization dashboard**
+- Provides **automated interpretation** guide
+- Detects relationships that linear methods miss
 
 ### Running the Command-Line Tool
 
@@ -220,7 +249,62 @@ The multi-modal analyzer finds correlations between:
 2. **Research**: Understand neural correlates of cognition
 3. **Quality Control**: Verify data integrity across modalities
 
-For detailed analysis guide, see [`MULTIMODAL_ANALYSIS.md`](MULTIMODAL_ANALYSIS.md)
+**For detailed guides:**
+- Linear correlation analysis: [`MULTIMODAL_ANALYSIS.md`](MULTIMODAL_ANALYSIS.md)
+- Non-linear dynamics: [`NONLINEAR_DYNAMICS.md`](NONLINEAR_DYNAMICS.md) 🔬
+
+## Understanding Non-Linear Dynamics 🔬
+
+### Why Non-Linear Analysis?
+
+**Brain dynamics are inherently non-linear!** Linear correlation (Pearson's r) only detects linear relationships. Non-linear methods reveal:
+
+1. **Chaotic Dynamics**: Lyapunov exponent > 0 indicates chaos
+2. **Complexity**: Fractal dimension, entropy measures
+3. **Phase Coupling**: Oscillations synchronized by phase, not amplitude
+4. **Directed Flow**: Transfer entropy shows X→Y directionality
+5. **Hidden Dependencies**: Mutual information finds non-linear relationships
+
+### Key Non-Linear Metrics
+
+| Metric | What It Measures | Clinical Use |
+|--------|------------------|--------------|
+| **Shannon Entropy** | Information content | Complexity, consciousness level |
+| **Sample Entropy** | Regularity | Seizure prediction, anesthesia depth |
+| **Higuchi FD** | Fractal complexity (1-2) | Cognitive load, maturation |
+| **Lyapunov Exponent** | Chaos (>0=chaotic) | Pathology detection |
+| **DFA Alpha** | Long-range correlations | Healthy brain ≈ 1.0 |
+| **Mutual Information** | Non-linear dependency | Any functional coupling |
+| **Phase Sync (PSI)** | Oscillatory coupling | Network integration |
+| **Transfer Entropy** | Directional flow | Causal relationships |
+
+### Example: High Complexity State
+
+**Results:**
+- Shannon Entropy: 4.5 (high)
+- Higuchi FD: 1.75 (high)
+- Lyapunov: 0.05 (positive = chaotic)
+- PSI Alpha: 0.85 (strong sync)
+
+**Interpretation:**
+- Complex, information-rich brain state
+- Weakly chaotic dynamics (normal)
+- Strong alpha synchronization
+- Likely: Awake, alert, cognitively engaged
+
+### When Linear and Non-Linear Disagree
+
+**Scenario**: Linear correlation = 0.05 (very weak), but Mutual Information = 2.1 (strong)
+
+**Meaning**: Strong **non-linear** relationship exists that linear methods miss!
+
+**Examples**:
+- Threshold effects
+- Phase-based coupling
+- Frequency modulation
+- Saturation/ceiling effects
+
+For complete non-linear dynamics guide, see [`NONLINEAR_DYNAMICS.md`](NONLINEAR_DYNAMICS.md)
 
 ## Troubleshooting
 

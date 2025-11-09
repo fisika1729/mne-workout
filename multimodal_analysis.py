@@ -21,6 +21,14 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import non-linear analysis module
+try:
+    from nonlinear_analysis import NonLinearAnalyzer, compute_all_nonlinear_metrics
+    NONLINEAR_AVAILABLE = True
+except ImportError:
+    NONLINEAR_AVAILABLE = False
+    print("Warning: nonlinear_analysis module not found. Non-linear analysis will be disabled.")
+
 
 class MultiModalAnalyzer:
     """Advanced application for multi-modal MRI/EEG data analysis"""
@@ -83,8 +91,12 @@ class MultiModalAnalyzer:
         analysis_frame = ttk.LabelFrame(control_panel, text="Analysis", padding="5")
         analysis_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-        ttk.Button(analysis_frame, text="Correlate",
+        ttk.Button(analysis_frame, text="Linear Corr",
                   command=self.compute_correlations).pack(side=tk.LEFT, padx=5)
+
+        if NONLINEAR_AVAILABLE:
+            ttk.Button(analysis_frame, text="Non-Linear",
+                      command=self.compute_nonlinear_analysis).pack(side=tk.LEFT, padx=5)
 
         # Notebook for different visualization tabs
         self.notebook = ttk.Notebook(self.root)
@@ -98,15 +110,20 @@ class MultiModalAnalyzer:
         self.mri_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.mri_tab, text="MRI Data")
 
-        # Tab 3: Correlation Analysis
+        # Tab 3: Correlation Analysis (Linear)
         self.corr_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.corr_tab, text="Correlation Analysis")
+        self.notebook.add(self.corr_tab, text="Linear Correlation")
 
-        # Tab 4: Source Localization
+        # Tab 4: Non-Linear Analysis
+        if NONLINEAR_AVAILABLE:
+            self.nonlinear_tab = ttk.Frame(self.notebook)
+            self.notebook.add(self.nonlinear_tab, text="Non-Linear Dynamics")
+
+        # Tab 5: Source Localization
         self.source_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.source_tab, text="Source Localization")
 
-        # Tab 5: Info
+        # Tab 6: Info
         self.info_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.info_tab, text="Data Info")
 
@@ -732,6 +749,344 @@ class MultiModalAnalyzer:
             "3. Apply inverse solution to data\n\n"
             "This requires proper MRI segmentation and BEM models.\n"
             "See MNE-Python documentation for complete workflow.")
+
+    def compute_nonlinear_analysis(self):
+        """Compute non-linear dynamics analysis"""
+        if not NONLINEAR_AVAILABLE:
+            messagebox.showerror("Error", "Non-linear analysis module not available!")
+            return
+
+        if self.eeg_data is None or self.mri_data is None:
+            messagebox.showwarning("Warning",
+                "Please load both EEG and MRI data first!")
+            return
+
+        try:
+            self.status_bar.config(text="Computing non-linear dynamics analysis...")
+            self.root.update()
+
+            # Extract representative signals from EEG and MRI
+            eeg_signal = np.mean(self.eeg_data.get_data(), axis=0)  # Average across channels
+            mri_signal = self.mri_data.flatten()
+            mri_signal = mri_signal[mri_signal > np.percentile(mri_signal, 5)]  # Remove background
+
+            # Downsample MRI to match EEG length (for time-series analysis)
+            if len(mri_signal) > len(eeg_signal):
+                indices = np.linspace(0, len(mri_signal) - 1, len(eeg_signal), dtype=int)
+                mri_signal_resampled = mri_signal[indices]
+            else:
+                mri_signal_resampled = mri_signal
+
+            # Compute all non-linear metrics
+            sfreq = self.eeg_data.info['sfreq']
+            self.nonlinear_results = compute_all_nonlinear_metrics(
+                eeg_signal,
+                mri_signal_resampled,
+                sfreq=sfreq
+            )
+
+            # Additional channel-wise analysis
+            self.compute_channelwise_nonlinear()
+
+            # Display results
+            self.display_nonlinear_results()
+            self.plot_nonlinear_results()
+
+            self.status_bar.config(text="Non-linear analysis complete")
+            messagebox.showinfo("Success", "Non-linear dynamics analysis completed!")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Non-linear analysis failed:\n{str(e)}")
+            self.status_bar.config(text="Error in non-linear analysis")
+            import traceback
+            traceback.print_exc()
+
+    def compute_channelwise_nonlinear(self):
+        """Compute non-linear metrics for each EEG channel"""
+        if not hasattr(self, 'nonlinear_results'):
+            self.nonlinear_results = {}
+
+        eeg_data = self.eeg_data.get_data()
+        n_channels = min(eeg_data.shape[0], 20)  # Limit to first 20 channels
+
+        # Compute entropy measures for each channel
+        channel_metrics = {
+            'shannon_entropy': [],
+            'sample_entropy': [],
+            'higuchi_fd': [],
+            'lyapunov': []
+        }
+
+        for ch_idx in range(n_channels):
+            ch_data = eeg_data[ch_idx, :]
+
+            try:
+                channel_metrics['shannon_entropy'].append(
+                    NonLinearAnalyzer.shannon_entropy(ch_data))
+            except:
+                channel_metrics['shannon_entropy'].append(0)
+
+            try:
+                channel_metrics['sample_entropy'].append(
+                    NonLinearAnalyzer.sample_entropy(ch_data))
+            except:
+                channel_metrics['sample_entropy'].append(0)
+
+            try:
+                channel_metrics['higuchi_fd'].append(
+                    NonLinearAnalyzer.higuchi_fractal_dimension(ch_data))
+            except:
+                channel_metrics['higuchi_fd'].append(0)
+
+            try:
+                channel_metrics['lyapunov'].append(
+                    NonLinearAnalyzer.lyapunov_exponent_rosenstein(ch_data))
+            except:
+                channel_metrics['lyapunov'].append(0)
+
+        self.nonlinear_results['channel_metrics'] = channel_metrics
+        self.nonlinear_results['channel_names'] = self.eeg_data.ch_names[:n_channels]
+
+    def display_nonlinear_results(self):
+        """Display non-linear analysis results in info tab"""
+        if not hasattr(self, 'nonlinear_results'):
+            return
+
+        results_text = []
+        results_text.append("=" * 80)
+        results_text.append("NON-LINEAR DYNAMICS ANALYSIS")
+        results_text.append("=" * 80)
+        results_text.append("")
+
+        results_text.append("EEG NON-LINEAR FEATURES:")
+        results_text.append("-" * 80)
+
+        # Single signal metrics
+        for key, value in self.nonlinear_results.items():
+            if key.endswith('_x') and not isinstance(value, (list, dict, np.ndarray)):
+                metric_name = key.replace('_x', '').replace('_', ' ').title()
+                results_text.append(f"  {metric_name}: {value:.4f}")
+
+        results_text.append("")
+        results_text.append("MRI NON-LINEAR FEATURES:")
+        results_text.append("-" * 80)
+
+        for key, value in self.nonlinear_results.items():
+            if key.endswith('_y') and not isinstance(value, (list, dict, np.ndarray)):
+                metric_name = key.replace('_y', '').replace('_', ' ').title()
+                results_text.append(f"  {metric_name}: {value:.4f}")
+
+        results_text.append("")
+        results_text.append("CROSS-SIGNAL NON-LINEAR METRICS:")
+        results_text.append("-" * 80)
+
+        # Mutual information
+        if 'mutual_information' in self.nonlinear_results:
+            results_text.append(f"  Mutual Information: {self.nonlinear_results['mutual_information']:.4f}")
+            results_text.append(f"  Normalized MI: {self.nonlinear_results['normalized_mi']:.4f}")
+            results_text.append("")
+
+        # Phase synchronization
+        results_text.append("  Phase Synchronization Index (by frequency band):")
+        for band in ['delta', 'theta', 'alpha', 'beta', 'gamma']:
+            key = f'psi_{band}'
+            if key in self.nonlinear_results:
+                results_text.append(f"    {band.capitalize()}: {self.nonlinear_results[key]:.4f}")
+        results_text.append("")
+
+        # Transfer entropy
+        if 'transfer_entropy_y_to_x' in self.nonlinear_results:
+            results_text.append("  Transfer Entropy (directed information flow):")
+            results_text.append(f"    MRI → EEG: {self.nonlinear_results['transfer_entropy_y_to_x']:.4f}")
+            results_text.append(f"    EEG → MRI: {self.nonlinear_results['transfer_entropy_x_to_y']:.4f}")
+            results_text.append("")
+
+        # Recurrence
+        if 'recurrence_rate' in self.nonlinear_results:
+            results_text.append(f"  Cross-Recurrence Rate: {self.nonlinear_results['recurrence_rate']:.4f}")
+            results_text.append("")
+
+        results_text.append("=" * 80)
+        results_text.append("INTERPRETATION GUIDE:")
+        results_text.append("-" * 80)
+        results_text.append("ENTROPY MEASURES:")
+        results_text.append("  - Shannon Entropy: Information content (higher = more complex)")
+        results_text.append("  - Sample Entropy: Regularity (lower = more regular)")
+        results_text.append("")
+        results_text.append("FRACTAL DIMENSION:")
+        results_text.append("  - Higuchi FD: Complexity (1.0-2.0, higher = more complex)")
+        results_text.append("  - Correlation Dim: Attractor dimension")
+        results_text.append("")
+        results_text.append("CHAOS INDICATORS:")
+        results_text.append("  - Lyapunov Exponent: >0 indicates chaos")
+        results_text.append("  - DFA Alpha: 0.5=random, 1.0=pink noise, 1.5=Brownian")
+        results_text.append("")
+        results_text.append("COUPLING MEASURES:")
+        results_text.append("  - Mutual Information: Non-linear dependency (0=independent)")
+        results_text.append("  - Phase Sync Index: 0=no sync, 1=perfect sync")
+        results_text.append("  - Transfer Entropy: Directional information flow")
+        results_text.append("=" * 80)
+
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(1.0, "\n".join(results_text))
+
+    def plot_nonlinear_results(self):
+        """Plot non-linear analysis results"""
+        if not hasattr(self, 'nonlinear_results'):
+            return
+
+        # Clear non-linear tab
+        for widget in self.nonlinear_tab.winfo_children():
+            widget.destroy()
+
+        plot_frame = ttk.Frame(self.nonlinear_tab)
+        plot_frame.pack(fill=tk.BOTH, expand=True)
+
+        fig = Figure(figsize=(16, 10))
+
+        # Plot 1: Entropy measures
+        ax1 = fig.add_subplot(331)
+        metrics = ['shannon_entropy_x', 'sample_entropy_x', 'approximate_entropy_x']
+        values = [self.nonlinear_results.get(m, 0) for m in metrics]
+        labels = ['Shannon', 'Sample', 'Approximate']
+        ax1.bar(labels, values, color=['steelblue', 'coral', 'lightgreen'])
+        ax1.set_title('EEG Entropy Measures', fontweight='bold')
+        ax1.set_ylabel('Entropy Value')
+        ax1.tick_params(axis='x', rotation=45)
+
+        # Plot 2: Fractal dimensions
+        ax2 = fig.add_subplot(332)
+        fd_metrics = {
+            'Higuchi FD': self.nonlinear_results.get('higuchi_fd_x', 0),
+            'Corr Dim': self.nonlinear_results.get('correlation_dim_x', 0)
+        }
+        ax2.bar(fd_metrics.keys(), fd_metrics.values(), color='purple', alpha=0.7)
+        ax2.set_title('EEG Fractal Dimensions', fontweight='bold')
+        ax2.set_ylabel('Dimension')
+        ax2.axhline(y=1.5, color='r', linestyle='--', label='Expected range')
+
+        # Plot 3: Chaos indicators
+        ax3 = fig.add_subplot(333)
+        chaos_metrics = {
+            'Lyapunov': self.nonlinear_results.get('lyapunov_x', 0),
+            'DFA Alpha': self.nonlinear_results.get('dfa_alpha_x', 0)
+        }
+        colors_chaos = ['red' if chaos_metrics['Lyapunov'] > 0 else 'green',
+                       'blue']
+        ax3.bar(chaos_metrics.keys(), chaos_metrics.values(), color=colors_chaos, alpha=0.7)
+        ax3.set_title('Chaos Indicators', fontweight='bold')
+        ax3.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        ax3.set_ylabel('Value')
+
+        # Plot 4: Phase Synchronization
+        ax4 = fig.add_subplot(334)
+        bands = ['delta', 'theta', 'alpha', 'beta', 'gamma']
+        psi_values = [self.nonlinear_results.get(f'psi_{band}', 0) for band in bands]
+        ax4.bar(bands, psi_values, color='teal', alpha=0.7)
+        ax4.set_title('Phase Synchronization Index', fontweight='bold')
+        ax4.set_ylabel('PSI (0-1)')
+        ax4.set_ylim([0, 1])
+        ax4.axhline(y=0.5, color='r', linestyle='--', alpha=0.5)
+        ax4.tick_params(axis='x', rotation=45)
+
+        # Plot 5: Mutual Information
+        ax5 = fig.add_subplot(335)
+        mi_metrics = {
+            'MI': self.nonlinear_results.get('mutual_information', 0),
+            'Normalized\nMI': self.nonlinear_results.get('normalized_mi', 0)
+        }
+        ax5.bar(mi_metrics.keys(), mi_metrics.values(), color=['orange', 'gold'])
+        ax5.set_title('Mutual Information', fontweight='bold')
+        ax5.set_ylabel('MI Value')
+
+        # Plot 6: Transfer Entropy
+        ax6 = fig.add_subplot(336)
+        te_data = {
+            'MRI→EEG': self.nonlinear_results.get('transfer_entropy_y_to_x', 0),
+            'EEG→MRI': self.nonlinear_results.get('transfer_entropy_x_to_y', 0)
+        }
+        ax6.barh(list(te_data.keys()), list(te_data.values()),
+                color=['darkgreen', 'darkblue'])
+        ax6.set_title('Transfer Entropy (Directionality)', fontweight='bold')
+        ax6.set_xlabel('TE Value')
+
+        # Plot 7: Channel-wise entropy
+        if 'channel_metrics' in self.nonlinear_results:
+            ax7 = fig.add_subplot(337)
+            ch_metrics = self.nonlinear_results['channel_metrics']
+            ch_names = self.nonlinear_results['channel_names']
+            n_ch = min(len(ch_names), 10)  # Show first 10 channels
+
+            ax7.plot(ch_metrics['shannon_entropy'][:n_ch], 'o-',
+                    label='Shannon Entropy', marker='o')
+            ax7.set_title('Channel-wise Shannon Entropy', fontweight='bold')
+            ax7.set_xlabel('Channel Index')
+            ax7.set_ylabel('Entropy')
+            ax7.grid(True, alpha=0.3)
+            ax7.legend()
+
+        # Plot 8: Channel-wise complexity
+        if 'channel_metrics' in self.nonlinear_results:
+            ax8 = fig.add_subplot(338)
+            ch_metrics = self.nonlinear_results['channel_metrics']
+            n_ch = min(len(ch_names), 10)
+
+            ax8.plot(ch_metrics['higuchi_fd'][:n_ch], 's-',
+                    color='purple', label='Higuchi FD', marker='s')
+            ax8.set_title('Channel-wise Fractal Dimension', fontweight='bold')
+            ax8.set_xlabel('Channel Index')
+            ax8.set_ylabel('Fractal Dimension')
+            ax8.grid(True, alpha=0.3)
+            ax8.legend()
+
+        # Plot 9: Summary comparison
+        ax9 = fig.add_subplot(339)
+        ax9.axis('off')
+        summary_text = "NON-LINEAR ANALYSIS SUMMARY\n\n"
+
+        # Complexity assessment
+        hfd = self.nonlinear_results.get('higuchi_fd_x', 0)
+        sampen = self.nonlinear_results.get('sample_entropy_x', 0)
+        lyap = self.nonlinear_results.get('lyapunov_x', 0)
+
+        if hfd > 1.7:
+            summary_text += "EEG Complexity: HIGH\n"
+        elif hfd > 1.3:
+            summary_text += "EEG Complexity: MEDIUM\n"
+        else:
+            summary_text += "EEG Complexity: LOW\n"
+
+        if lyap > 0:
+            summary_text += "Dynamics: CHAOTIC\n"
+        else:
+            summary_text += "Dynamics: STABLE\n"
+
+        summary_text += f"\nStrongest sync band:\n"
+        max_psi_band = max(['delta', 'theta', 'alpha', 'beta', 'gamma'],
+                          key=lambda b: self.nonlinear_results.get(f'psi_{b}', 0))
+        max_psi_val = self.nonlinear_results.get(f'psi_{max_psi_band}', 0)
+        summary_text += f"{max_psi_band.upper()}\n({max_psi_val:.3f})\n"
+
+        summary_text += f"\nMI: {self.nonlinear_results.get('normalized_mi', 0):.3f}\n"
+
+        summary_text += "\n✓ Non-linear features\n  capture dynamics\n  beyond linear\n  correlations"
+
+        ax9.text(0.1, 0.5, summary_text, fontsize=11, verticalalignment='center',
+                family='monospace', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
+
+        fig.suptitle('Non-Linear Dynamics Analysis', fontsize=16, fontweight='bold')
+        fig.tight_layout()
+
+        # Embed in tkinter
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, plot_frame)
+        toolbar.update()
+
+        # Switch to non-linear tab
+        self.notebook.select(self.nonlinear_tab)
 
     def update_info_display(self):
         """Update the info display with current data information"""
