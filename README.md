@@ -1,9 +1,28 @@
 # MNE-Python Data Analyzer
 
-A Python application for analyzing MRI/EEG data using the MNE-Python library. This tool provides an interactive GUI for loading, visualizing, and analyzing EEGLAB .set format files.
+A comprehensive Python application suite for analyzing MRI/EEG data using the MNE-Python library. Supports **multi-modal analysis** with correlation between structural (MRI) and functional (EEG) brain data.
+
+## Tools Included
+
+### 1. Basic EEG Analyzer (`mri_analysis.py`)
+- Single-modality EEG/MEG analysis
+- EEGLAB .set format support
+- Quick visualization and basic analysis
+
+### 2. Multi-Modal Analyzer (`multimodal_analysis.py`) ⭐ **NEW**
+- **Supports both MRI and EEG data**
+- **Multiple file formats** (EEGLAB, FIF, EDF, NIfTI, etc.)
+- **Correlation analysis** between MRI structure and EEG function
+- **Advanced visualizations** with statistical significance testing
+
+### 3. Command-Line Tool (`example_usage.py`)
+- Batch processing
+- Automated report generation
+- Scriptable analysis
 
 ## Features
 
+### Basic Features
 - **File Browser**: Easy-to-use tkinter-based file selection dialog
 - **Multiple Visualizations**:
   - Raw data plotting with customizable time windows
@@ -12,6 +31,21 @@ A Python application for analyzing MRI/EEG data using the MNE-Python library. Th
   - Detailed data information display
 - **Interactive GUI**: Built with tkinter and matplotlib for cross-platform compatibility
 - **Path Management**: Uses `os` and `pathlib` for robust file handling
+
+### Multi-Modal Features ⭐
+- **Multi-Format Support**:
+  - **EEG**: .set (EEGLAB), .fif (MNE), .edf, .bdf, .vhdr (BrainVision)
+  - **MRI**: .nii/.nii.gz (NIfTI), .mgz/.mgh (FreeSurfer)
+- **Correlation Analysis**:
+  - Spectral-spatial correlations (EEG frequency bands vs MRI regions)
+  - Statistical significance testing (p-values)
+  - Feature extraction from both modalities
+- **Advanced Visualizations**:
+  - EEG band power analysis (Delta, Theta, Alpha, Beta, Gamma)
+  - MRI 3D slice viewing (Sagittal, Coronal, Axial)
+  - Correlation heatmaps and scatter plots
+  - Channel connectivity matrices
+- **Find Similarities**: Automatically identifies correlations between brain structure and function
 
 ## Installation
 
@@ -40,7 +74,7 @@ pip install mne numpy scipy matplotlib pandas scikit-learn seaborn
 
 ## Usage
 
-### Running the Application
+### Running the Basic EEG Analyzer
 
 Simply run the main script:
 ```bash
@@ -51,6 +85,33 @@ Or make it executable and run:
 ```bash
 chmod +x mri_analysis.py
 ./mri_analysis.py
+```
+
+### Running the Multi-Modal Analyzer ⭐ **RECOMMENDED**
+
+For MRI/EEG correlation analysis:
+```bash
+python multimodal_analysis.py
+```
+
+**Workflow:**
+1. Click "Load EEG" → Select your EEG file (any supported format)
+2. Click "Load MRI" → Select your MRI file (.nii, .mgz, etc.)
+3. Click "Correlate" → Computes correlations between MRI and EEG
+4. View results in "Correlation Analysis" tab
+
+**What it does:**
+- Extracts EEG frequency band power (Delta, Theta, Alpha, Beta, Gamma)
+- Divides MRI into regions and computes intensity statistics
+- Correlates EEG spectral features with MRI spatial features
+- Displays statistical significance (p-values)
+- Shows which brain regions correlate with specific EEG frequencies
+
+### Running the Command-Line Tool
+
+For batch processing:
+```bash
+python example_usage.py /path/to/your/data.set
 ```
 
 ### Loading Data
@@ -83,21 +144,35 @@ The application provides three tabs:
 
 ## File Format Support
 
-Currently supports:
-- **EEGLAB .set files**: The primary format for this tool
+### EEG/MEG Formats
+- **EEGLAB** (.set) - Header and data files
+- **FIF** (.fif) - MNE-Python native format
+- **EDF** (.edf) - European Data Format
+- **BDF** (.bdf) - BioSemi Data Format
+- **BrainVision** (.vhdr, .vmrk, .eeg) - Brain Products
 
-The tool uses MNE-Python's `read_raw_eeglab()` function, which expects:
-- `.set` file (header file)
-- `.fdt` file (data file, if separate)
+### MRI Formats
+- **NIfTI** (.nii, .nii.gz) - Standard neuroimaging format
+- **FreeSurfer** (.mgz, .mgh) - FreeSurfer MRI format
+- Supports T1, T2, FLAIR, and other structural sequences
+
+### Notes
+- For EEGLAB: Both `.set` (header) and `.fdt` (data) files should be in same directory
+- For BrainVision: All three files (.vhdr, .vmrk, .eeg) must be present
+- MRI files are loaded using nibabel library
 
 ## Dependencies
 
 - **mne**: Core library for neurophysiological data analysis
 - **numpy**: Numerical computations
-- **scipy**: Scientific computing
+- **scipy**: Scientific computing and statistics
 - **matplotlib**: Plotting and visualization
+- **scikit-learn**: Machine learning (PCA, feature scaling)
+- **nibabel**: MRI file I/O (NIfTI, FreeSurfer formats)
 - **tkinter**: GUI framework (usually included with Python)
 - **pathlib & os**: File path management
+
+See `requirements.txt` for complete list with versions.
 
 ## Example Data
 
@@ -108,6 +183,44 @@ If you don't have .set files, you can:
 import mne
 sample_data_path = mne.datasets.sample.data_path()
 ```
+
+## Understanding Multi-Modal Correlations
+
+### What the Tool Computes
+
+The multi-modal analyzer finds correlations between:
+1. **EEG Frequency Band Power** (Delta, Theta, Alpha, Beta, Gamma)
+2. **MRI Regional Intensities** (brain regions divided spatially)
+
+### Interpreting Results
+
+**Correlation Coefficient**:
+- `+0.7 to +1.0`: Strong positive correlation
+- `+0.3 to +0.7`: Moderate positive correlation
+- `-0.3 to +0.3`: Weak or no correlation
+- `-0.7 to -0.3`: Moderate negative correlation
+- `-1.0 to -0.7`: Strong negative correlation
+
+**P-value**:
+- `< 0.05`: Statistically significant (marked in green)
+- `≥ 0.05`: Not statistically significant (may be due to chance)
+
+### Example Interpretation
+
+**Finding**: Alpha band power correlates with regional MRI intensity (r=0.65, p=0.01)
+
+**Interpretation**:
+- Regions with higher MRI intensity show stronger alpha oscillations
+- This is statistically significant (p < 0.05)
+- May indicate structural basis for alpha rhythm generation
+
+### Applications
+
+1. **Clinical**: Identify abnormal structure-function relationships
+2. **Research**: Understand neural correlates of cognition
+3. **Quality Control**: Verify data integrity across modalities
+
+For detailed analysis guide, see [`MULTIMODAL_ANALYSIS.md`](MULTIMODAL_ANALYSIS.md)
 
 ## Troubleshooting
 
@@ -124,6 +237,23 @@ sample_data_path = mne.datasets.sample.data_path()
   - Ubuntu/Debian: `sudo apt-get install python3-tk`
   - MacOS: tkinter comes with Python
   - Windows: tkinter comes with Python
+
+**Issue**: "Failed to load MRI file" or nibabel not found
+- **Solution**: Install nibabel: `pip install nibabel`
+
+**Issue**: Correlations are very weak or not significant
+- **Causes**:
+  - EEG and MRI from different subjects
+  - Poor data quality
+  - Mismatched data types
+  - No true structural-functional relationship
+- **Solution**: Verify both datasets are from the same subject at similar time points
+
+**Issue**: Memory error with large MRI files
+- **Solution**:
+  - Downsample MRI before analysis
+  - Use smaller ROIs (regions of interest)
+  - Close other applications to free memory
 
 ## Contributing
 

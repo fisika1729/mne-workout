@@ -1,4 +1,4 @@
-# MNE-Python Data Analysis Tool Requirements
+# MNE-Python Multi-Modal Data Analysis Tool Requirements
 
 # Core dependencies
 mne>=1.5.0
@@ -13,6 +13,19 @@ scikit-learn>=1.0.0
 # For better visualization
 seaborn>=0.11.0
 
+# MRI data support
+nibabel>=5.0.0
+
+# Optional: for reading various EEG formats
+pyedflib>=0.1.30
+
+# Optional: for DICOM support (medical imaging)
+# pydicom>=2.3.0
+
 # PyQt5 is optional but recommended for better MNE GUI features
 # Uncomment if you want to use MNE's native GUI instead of tkinter
 # pyqt5>=5.15.0
+
+# For advanced analysis
+# nilearn>=0.10.0  # Brain imaging analysis
+# pyvista>=0.38.0  # 3D visualization
