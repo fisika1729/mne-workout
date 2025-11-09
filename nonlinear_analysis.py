@@ -2,11 +2,13 @@
 """
 Non-linear Dynamics Analysis Module
 Provides methods for analyzing non-linear relationships in neuroimaging data
+Including bifurcation detection and analysis
 """
 
 import numpy as np
 from scipy import signal, stats
 from scipy.spatial.distance import pdist, squareform
+from scipy.ndimage import sobel, generic_gradient_magnitude
 from sklearn.metrics import mutual_info_score
 from sklearn.neighbors import NearestNeighbors
 import warnings
@@ -651,6 +653,370 @@ class NonLinearAnalyzer:
             lambda_max = 0
 
         return lambda_max
+
+    @staticmethod
+    def zero_one_test_for_chaos(x):
+        """
+        0-1 Test for Chaos (Gottwald & Melbourne)
+
+        Detects chaotic behavior and bifurcations
+        Returns value close to 0 for regular dynamics, close to 1 for chaotic
+
+        Parameters:
+        -----------
+        x : array-like
+            Input time series
+
+        Returns:
+        --------
+        K : float
+            Test statistic (0 = regular, 1 = chaotic)
+        """
+        x = np.array(x)
+        N = len(x)
+
+        # Choose random phase parameter
+        c = np.random.uniform(np.pi/5, 4*np.pi/5)
+
+        # Compute translation variables
+        p = np.zeros(N)
+        q = np.zeros(N)
+
+        for n in range(1, N):
+            p[n] = p[n-1] + x[n] * np.cos(n * c)
+            q[n] = q[n-1] + x[n] * np.sin(n * c)
+
+        # Compute mean square displacement
+        M_c = np.zeros(int(N / 10))
+
+        for n in range(1, int(N / 10)):
+            diff_p = p[n:] - p[:-n]
+            diff_q = q[n:] - q[:-n]
+            M_c[n] = np.mean(diff_p**2 + diff_q**2)
+
+        # Compute correlation coefficient
+        n_vals = np.arange(1, int(N / 10))
+        if len(n_vals) > 1 and len(M_c[1:]) > 1:
+            corr = np.corrcoef(n_vals, M_c[1:])[0, 1]
+            K = corr
+        else:
+            K = 0
+
+        # Normalize to [0, 1]
+        K = abs(K)
+
+        return K
+
+    @staticmethod
+    def detect_temporal_bifurcations(x, window_size=None, overlap=0.5):
+        """
+        Detect bifurcation points in temporal signals (EEG)
+
+        Uses sliding window analysis to detect sudden changes in dynamics
+
+        Parameters:
+        -----------
+        x : array-like
+            Time series (EEG signal)
+        window_size : int
+            Window size for analysis (default: len(x)//10)
+        overlap : float
+            Overlap between windows (0-1)
+
+        Returns:
+        --------
+        bifurcations : dict
+            Contains bifurcation points, metrics, and locations
+        """
+        x = np.array(x)
+        N = len(x)
+
+        if window_size is None:
+            window_size = max(100, N // 10)
+
+        step = int(window_size * (1 - overlap))
+
+        # Metrics to track
+        entropies = []
+        lyapunovs = []
+        variances = []
+        positions = []
+
+        # Sliding window analysis
+        for i in range(0, N - window_size, step):
+            window = x[i:i + window_size]
+            positions.append(i + window_size // 2)
+
+            # Compute metrics
+            try:
+                entropy = NonLinearAnalyzer.shannon_entropy(window)
+                entropies.append(entropy)
+            except:
+                entropies.append(0)
+
+            variances.append(np.var(window))
+
+            # Simplified Lyapunov (too expensive for all windows)
+            # Just use variance rate of change as proxy
+            if len(variances) > 1:
+                lyap_proxy = abs(variances[-1] - variances[-2])
+            else:
+                lyap_proxy = 0
+            lyapunovs.append(lyap_proxy)
+
+        # Detect sudden changes (bifurcation points)
+        entropies = np.array(entropies)
+        variances = np.array(variances)
+        positions = np.array(positions)
+
+        # Compute derivatives
+        if len(entropies) > 2:
+            entropy_diff = np.abs(np.diff(entropies))
+            variance_diff = np.abs(np.diff(variances))
+
+            # Normalize
+            entropy_diff = entropy_diff / (np.max(entropy_diff) + 1e-10)
+            variance_diff = variance_diff / (np.max(variance_diff) + 1e-10)
+
+            # Combined change metric
+            change_metric = entropy_diff + variance_diff
+
+            # Find peaks (bifurcation candidates)
+            threshold = np.mean(change_metric) + 2 * np.std(change_metric)
+            bifurcation_indices = np.where(change_metric > threshold)[0]
+
+            bifurcation_times = positions[bifurcation_indices]
+            bifurcation_strengths = change_metric[bifurcation_indices]
+        else:
+            bifurcation_times = np.array([])
+            bifurcation_strengths = np.array([])
+
+        return {
+            'bifurcation_points': bifurcation_times,
+            'bifurcation_strengths': bifurcation_strengths,
+            'entropy_trajectory': entropies,
+            'variance_trajectory': variances,
+            'positions': positions,
+            'n_bifurcations': len(bifurcation_times)
+        }
+
+    @staticmethod
+    def detect_spatial_bifurcations(img, method='gradient'):
+        """
+        Detect bifurcation points in spatial data (MRI images)
+
+        Identifies structural transitions, boundaries, and discontinuities
+
+        Parameters:
+        -----------
+        img : ndarray
+            2D or 3D image (MRI data)
+        method : str
+            'gradient', 'laplacian', or 'variance'
+
+        Returns:
+        --------
+        bifurcations : dict
+            Spatial bifurcation map and metrics
+        """
+        img = np.array(img)
+
+        if len(img.shape) == 3:
+            # For 3D, analyze middle slice or average
+            img_2d = img[:, :, img.shape[2] // 2]
+        else:
+            img_2d = img
+
+        if method == 'gradient':
+            # Compute gradient magnitude (edges/boundaries)
+            gx = sobel(img_2d, axis=0, mode='constant')
+            gy = sobel(img_2d, axis=1, mode='constant')
+            gradient_mag = np.sqrt(gx**2 + gy**2)
+
+            bifurcation_map = gradient_mag
+
+        elif method == 'laplacian':
+            # Laplacian for curvature changes
+            from scipy.ndimage import laplace
+            laplacian = laplace(img_2d)
+            bifurcation_map = np.abs(laplacian)
+
+        elif method == 'variance':
+            # Local variance (texture changes)
+            from scipy.ndimage import generic_filter
+            def local_var(values):
+                return np.var(values)
+
+            bifurcation_map = generic_filter(img_2d, local_var, size=5)
+
+        # Threshold to find significant bifurcations
+        threshold = np.mean(bifurcation_map) + 2 * np.std(bifurcation_map)
+        significant_bifurcations = bifurcation_map > threshold
+
+        # Find bifurcation locations
+        bifurcation_coords = np.where(significant_bifurcations)
+
+        return {
+            'bifurcation_map': bifurcation_map,
+            'significant_bifurcations': significant_bifurcations,
+            'bifurcation_coordinates': bifurcation_coords,
+            'n_bifurcation_pixels': np.sum(significant_bifurcations),
+            'mean_bifurcation_strength': np.mean(bifurcation_map[significant_bifurcations])
+                                         if np.any(significant_bifurcations) else 0,
+            'bifurcation_density': np.sum(significant_bifurcations) / bifurcation_map.size
+        }
+
+    @staticmethod
+    def compare_bifurcations_temporal_spatial(temporal_bif, spatial_bif, temporal_signal, spatial_image):
+        """
+        Compare bifurcations between temporal (EEG) and spatial (MRI) data
+
+        Correlates temporal transition points with spatial discontinuities
+
+        Parameters:
+        -----------
+        temporal_bif : dict
+            Output from detect_temporal_bifurcations
+        spatial_bif : dict
+            Output from detect_spatial_bifurcations
+        temporal_signal : array
+            Original EEG signal
+        spatial_image : array
+            Original MRI image
+
+        Returns:
+        --------
+        correlation : dict
+            Correlation metrics between temporal and spatial bifurcations
+        """
+        comparison = {}
+
+        # Number of bifurcations
+        comparison['n_temporal_bifurcations'] = temporal_bif['n_bifurcations']
+        comparison['n_spatial_bifurcation_regions'] = spatial_bif['n_bifurcation_pixels']
+        comparison['spatial_bifurcation_density'] = spatial_bif['bifurcation_density']
+
+        # Temporal bifurcation density
+        if len(temporal_signal) > 0:
+            comparison['temporal_bifurcation_density'] = (
+                temporal_bif['n_bifurcations'] / len(temporal_signal)
+            )
+        else:
+            comparison['temporal_bifurcation_density'] = 0
+
+        # Complexity correlation
+        # Higher bifurcations = higher complexity
+        temporal_complexity = temporal_bif['n_bifurcations']
+        spatial_complexity = spatial_bif['n_bifurcation_pixels']
+
+        # Normalize
+        if temporal_complexity > 0 or spatial_complexity > 0:
+            max_val = max(temporal_complexity, spatial_complexity)
+            temporal_norm = temporal_complexity / max_val
+            spatial_norm = spatial_complexity / max_val
+
+            # Simple correlation metric
+            comparison['complexity_ratio'] = (
+                min(temporal_norm, spatial_norm) / (max(temporal_norm, spatial_norm) + 1e-10)
+            )
+        else:
+            comparison['complexity_ratio'] = 0
+
+        # Bifurcation strength correlation
+        if temporal_bif['n_bifurcations'] > 0 and spatial_bif['n_bifurcation_pixels'] > 0:
+            mean_temporal_strength = np.mean(temporal_bif['bifurcation_strengths'])
+            mean_spatial_strength = spatial_bif['mean_bifurcation_strength']
+
+            # Normalize and compare
+            total_strength = mean_temporal_strength + mean_spatial_strength
+            if total_strength > 0:
+                comparison['strength_balance'] = mean_temporal_strength / total_strength
+            else:
+                comparison['strength_balance'] = 0.5
+        else:
+            comparison['strength_balance'] = 0.5
+
+        # Interpretation
+        if comparison['complexity_ratio'] > 0.7:
+            comparison['interpretation'] = "High correlation: Temporal and spatial bifurcations are balanced"
+        elif comparison['temporal_bifurcation_density'] > comparison['spatial_bifurcation_density']:
+            comparison['interpretation'] = "Temporal dominant: More dynamic transitions in EEG than structural in MRI"
+        else:
+            comparison['interpretation'] = "Spatial dominant: More structural complexity in MRI than temporal in EEG"
+
+        return comparison
+
+    @staticmethod
+    def recurrence_based_bifurcation_detection(x, embedding_dim=3, delay=1):
+        """
+        Detect bifurcations using recurrence plot analysis
+
+        Bifurcations show up as changes in recurrence structure
+
+        Parameters:
+        -----------
+        x : array-like
+            Time series
+        embedding_dim : int
+            Embedding dimension
+        delay : int
+            Time delay
+
+        Returns:
+        --------
+        bifurcation_info : dict
+            Recurrence-based bifurcation metrics
+        """
+        x = np.array(x)
+        N = len(x)
+
+        # Time-delay embedding
+        M = N - (embedding_dim - 1) * delay
+        if M < 10:
+            return {'n_bifurcations': 0, 'determinism': 0}
+
+        embedded = np.zeros((M, embedding_dim))
+        for i in range(M):
+            embedded[i] = x[i:i + embedding_dim * delay:delay]
+
+        # Compute recurrence matrix
+        distances = squareform(pdist(embedded, metric='euclidean'))
+        threshold = 0.1 * np.max(distances)
+        recurrence_matrix = (distances < threshold).astype(int)
+
+        # Analyze diagonal lines (determinism)
+        # Changes in determinism indicate bifurcations
+        window = 50
+        determinisms = []
+
+        for i in range(0, M - window, window // 2):
+            sub_matrix = recurrence_matrix[i:i+window, i:i+window]
+            # Count diagonal lines
+            diag_length = 0
+            for d in range(-window+1, window):
+                diag = np.diagonal(sub_matrix, d)
+                diag_length += np.sum(diag)
+
+            det = diag_length / (window * window)
+            determinisms.append(det)
+
+        determinisms = np.array(determinisms)
+
+        # Detect sudden changes
+        if len(determinisms) > 2:
+            det_diff = np.abs(np.diff(determinisms))
+            threshold_bif = np.mean(det_diff) + 1.5 * np.std(det_diff)
+            bifurcations = np.where(det_diff > threshold_bif)[0]
+        else:
+            bifurcations = np.array([])
+
+        return {
+            'n_bifurcations': len(bifurcations),
+            'bifurcation_indices': bifurcations,
+            'determinism_trajectory': determinisms,
+            'mean_determinism': np.mean(determinisms),
+            'recurrence_matrix': recurrence_matrix
+        }
 
 
 def compute_all_nonlinear_metrics(x, y=None, sfreq=250):

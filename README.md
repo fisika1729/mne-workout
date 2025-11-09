@@ -77,10 +77,15 @@ The adaptive system supports **5 neuroimaging modalities**:
   - Spectral-spatial correlations (EEG frequency bands vs MRI regions)
   - Statistical significance testing (p-values)
   - Feature extraction from both modalities
-- **Non-Linear Dynamics Analysis** 🔬 **NEW**:
+- **Non-Linear Dynamics Analysis** 🔬:
   - **Entropy measures**: Shannon, Sample, Approximate entropy
   - **Fractal dimensions**: Higuchi FD, Correlation dimension
-  - **Chaos indicators**: Lyapunov exponent, DFA
+  - **Chaos indicators**: Lyapunov exponent, DFA, 0-1 test
+  - **Bifurcation Analysis** ⚡ **NEW**:
+    - **Temporal bifurcations**: Detect EEG state transitions (seizures, sleep stages)
+    - **Spatial bifurcations**: Detect MRI structural transitions (tissue boundaries, lesions)
+    - **Cross-modal comparison**: Correlate temporal vs spatial bifurcations
+    - **Recurrence-based**: Phase space bifurcation detection
   - **Mutual Information**: Detects non-linear dependencies
   - **Phase Synchronization**: Band-specific oscillatory coupling
   - **Transfer Entropy**: Directional information flow
@@ -339,7 +344,8 @@ The multi-modal analyzer finds correlations between:
 3. **Quality Control**: Verify data integrity across modalities
 
 **For detailed guides:**
-- **Adaptive system**: [`ADAPTIVE_SYSTEM.md`](ADAPTIVE_SYSTEM.md) 🚀 **NEW**
+- **Adaptive system**: [`ADAPTIVE_SYSTEM.md`](ADAPTIVE_SYSTEM.md) 🚀
+- **Bifurcation analysis**: [`BIFURCATION_ANALYSIS.md`](BIFURCATION_ANALYSIS.md) ⚡ **NEW**
 - Linear correlation analysis: [`MULTIMODAL_ANALYSIS.md`](MULTIMODAL_ANALYSIS.md)
 - Non-linear dynamics: [`NONLINEAR_DYNAMICS.md`](NONLINEAR_DYNAMICS.md) 🔬
 
