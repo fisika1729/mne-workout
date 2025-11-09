@@ -947,6 +947,360 @@ class NonLinearAnalyzer:
         return comparison
 
     @staticmethod
+    def detect_meg_bifurcations(meg_data, sfreq=1000, window_size=None, overlap=0.5):
+        """
+        Detect bifurcations in MEG data
+
+        MEG has higher spatial resolution than EEG, so we can detect:
+        - Temporal bifurcations (like EEG)
+        - Sensor-specific bifurcations
+        - Field pattern bifurcations
+
+        Parameters:
+        -----------
+        meg_data : array-like
+            MEG data (channels x time)
+        sfreq : float
+            Sampling frequency
+        window_size : int
+            Window size for analysis
+        overlap : float
+            Overlap between windows
+
+        Returns:
+        --------
+        bifurcations : dict
+            MEG bifurcation metrics
+        """
+        if len(meg_data.shape) == 1:
+            # Single channel
+            meg_data = meg_data.reshape(1, -1)
+
+        n_channels, n_samples = meg_data.shape
+
+        # Global temporal bifurcations (average across channels)
+        global_signal = np.mean(meg_data, axis=0)
+        global_bif = NonLinearAnalyzer.detect_temporal_bifurcations(
+            global_signal, window_size, overlap
+        )
+
+        # Channel-wise bifurcations
+        channel_bifurcations = []
+        for ch_idx in range(min(n_channels, 20)):  # Limit to 20 channels
+            ch_data = meg_data[ch_idx, :]
+            try:
+                ch_bif = NonLinearAnalyzer.detect_temporal_bifurcations(
+                    ch_data, window_size, overlap
+                )
+                channel_bifurcations.append(ch_bif['n_bifurcations'])
+            except:
+                channel_bifurcations.append(0)
+
+        # Spatial pattern changes (field topology bifurcations)
+        # Compute correlation between channels over time
+        if window_size is None:
+            window_size = max(100, n_samples // 10)
+
+        step = int(window_size * (1 - overlap))
+        spatial_pattern_changes = []
+
+        for i in range(0, n_samples - window_size, step):
+            window = meg_data[:, i:i + window_size]
+            # Compute inter-channel correlation
+            corr_matrix = np.corrcoef(window)
+            # Flatten upper triangle
+            spatial_pattern = corr_matrix[np.triu_indices_from(corr_matrix, k=1)]
+            spatial_pattern_changes.append(np.mean(spatial_pattern))
+
+        # Detect changes in spatial patterns
+        spatial_pattern_changes = np.array(spatial_pattern_changes)
+        if len(spatial_pattern_changes) > 2:
+            pattern_diff = np.abs(np.diff(spatial_pattern_changes))
+            pattern_diff_norm = pattern_diff / (np.max(pattern_diff) + 1e-10)
+
+            threshold = np.mean(pattern_diff_norm) + 2 * np.std(pattern_diff_norm)
+            spatial_bifurcations = np.where(pattern_diff_norm > threshold)[0]
+        else:
+            spatial_bifurcations = np.array([])
+
+        return {
+            'global_temporal_bifurcations': global_bif['n_bifurcations'],
+            'global_bifurcation_points': global_bif['bifurcation_points'],
+            'global_bifurcation_strengths': global_bif['bifurcation_strengths'],
+            'channel_bifurcation_counts': channel_bifurcations,
+            'mean_channel_bifurcations': np.mean(channel_bifurcations),
+            'spatial_pattern_bifurcations': len(spatial_bifurcations),
+            'spatial_pattern_change_points': spatial_bifurcations,
+            'total_bifurcations': global_bif['n_bifurcations'] + len(spatial_bifurcations),
+            'modality': 'MEG'
+        }
+
+    @staticmethod
+    def detect_fmri_bifurcations(fmri_data, tr=2.0, method='spatio-temporal'):
+        """
+        Detect bifurcations in fMRI data
+
+        fMRI is unique: 4D data (x, y, z, time)
+        Can detect:
+        - Temporal bifurcations: BOLD signal transitions over time
+        - Spatial bifurcations: Activation boundary changes
+        - Spatio-temporal bifurcations: How activation patterns shift
+
+        Parameters:
+        -----------
+        fmri_data : ndarray
+            4D fMRI data (x, y, z, time) or 3D (averaged over time)
+        tr : float
+            Repetition time (seconds)
+        method : str
+            'temporal', 'spatial', or 'spatio-temporal'
+
+        Returns:
+        --------
+        bifurcations : dict
+            fMRI bifurcation metrics
+        """
+        if len(fmri_data.shape) == 4:
+            x, y, z, t = fmri_data.shape
+            has_temporal = True
+        elif len(fmri_data.shape) == 3:
+            x, y, z = fmri_data.shape
+            has_temporal = False
+            t = 1
+        else:
+            raise ValueError("fMRI data must be 3D or 4D")
+
+        results = {'modality': 'fMRI'}
+
+        # Temporal bifurcations (if time dimension exists)
+        if has_temporal and method in ['temporal', 'spatio-temporal']:
+            # Average BOLD signal across space
+            global_bold = np.mean(fmri_data, axis=(0, 1, 2))
+
+            temporal_bif = NonLinearAnalyzer.detect_temporal_bifurcations(
+                global_bold, window_size=min(10, t // 3), overlap=0.5
+            )
+
+            results['temporal_bifurcations'] = temporal_bif['n_bifurcations']
+            results['temporal_bifurcation_points'] = temporal_bif['bifurcation_points']
+            results['temporal_bifurcation_strengths'] = temporal_bif['bifurcation_strengths']
+
+            # Regional temporal bifurcations
+            # Divide into 8 regions and detect bifurcations in each
+            regions = NonLinearAnalyzer._divide_fmri_regions(fmri_data)
+            regional_temporal_bif = []
+
+            for region in regions:
+                if region.size > 0:
+                    region_timeseries = np.mean(region, axis=(0, 1, 2))
+                    try:
+                        reg_bif = NonLinearAnalyzer.detect_temporal_bifurcations(
+                            region_timeseries, window_size=min(10, len(region_timeseries) // 3)
+                        )
+                        regional_temporal_bif.append(reg_bif['n_bifurcations'])
+                    except:
+                        regional_temporal_bif.append(0)
+
+            results['regional_temporal_bifurcations'] = regional_temporal_bif
+            results['mean_regional_bifurcations'] = np.mean(regional_temporal_bif)
+        else:
+            results['temporal_bifurcations'] = 0
+
+        # Spatial bifurcations (activation boundaries)
+        if method in ['spatial', 'spatio-temporal']:
+            if has_temporal:
+                # Use mean activation map
+                mean_activation = np.mean(fmri_data, axis=3)
+            else:
+                mean_activation = fmri_data
+
+            # Detect spatial bifurcations on middle slice
+            middle_slice = mean_activation[:, :, z // 2]
+            spatial_bif = NonLinearAnalyzer.detect_spatial_bifurcations(
+                middle_slice, method='gradient'
+            )
+
+            results['spatial_bifurcations'] = spatial_bif['n_bifurcation_pixels']
+            results['spatial_bifurcation_density'] = spatial_bif['bifurcation_density']
+            results['spatial_bifurcation_map'] = spatial_bif['bifurcation_map']
+
+        # Spatio-temporal bifurcations (activation pattern changes)
+        if has_temporal and method == 'spatio-temporal':
+            # Track how activation patterns change over time
+            pattern_correlations = []
+
+            for time_idx in range(t - 1):
+                corr = np.corrcoef(
+                    fmri_data[:, :, :, time_idx].flatten(),
+                    fmri_data[:, :, :, time_idx + 1].flatten()
+                )[0, 1]
+                pattern_correlations.append(corr)
+
+            pattern_correlations = np.array(pattern_correlations)
+
+            # Detect sudden pattern changes
+            pattern_changes = 1 - pattern_correlations  # Low corr = big change
+            threshold = np.mean(pattern_changes) + 2 * np.std(pattern_changes)
+            spatiotemporal_bif = np.where(pattern_changes > threshold)[0]
+
+            results['spatiotemporal_bifurcations'] = len(spatiotemporal_bif)
+            results['spatiotemporal_bifurcation_times'] = spatiotemporal_bif * tr
+            results['pattern_stability'] = np.mean(pattern_correlations)
+
+        # Total bifurcations
+        total = results.get('temporal_bifurcations', 0) + results.get('spatial_bifurcations', 0)
+        results['total_bifurcations'] = total
+
+        return results
+
+    @staticmethod
+    def _divide_fmri_regions(fmri_data):
+        """Divide 4D fMRI into 8 spatial regions"""
+        if len(fmri_data.shape) == 4:
+            x, y, z, t = fmri_data.shape
+            x_mid, y_mid, z_mid = x // 2, y // 2, z // 2
+
+            regions = [
+                fmri_data[:x_mid, :y_mid, :z_mid, :],
+                fmri_data[:x_mid, :y_mid, z_mid:, :],
+                fmri_data[:x_mid, y_mid:, :z_mid, :],
+                fmri_data[:x_mid, y_mid:, z_mid:, :],
+                fmri_data[x_mid:, :y_mid, :z_mid, :],
+                fmri_data[x_mid:, :y_mid, z_mid:, :],
+                fmri_data[x_mid:, y_mid:, :z_mid, :],
+                fmri_data[x_mid:, y_mid:, z_mid:, :]
+            ]
+        else:
+            regions = []
+
+        return regions
+
+    @staticmethod
+    def detect_cmri_bifurcations(cmri_data, method='all'):
+        """
+        Detect bifurcations in contrast-enhanced MRI
+
+        cMRI shows contrast agent uptake, revealing:
+        - Enhancement boundaries (tumor edges, blood-brain barrier breakdown)
+        - Perfusion transitions
+        - Vascular bifurcations
+
+        Parameters:
+        -----------
+        cmri_data : ndarray
+            Contrast-enhanced MRI data (2D, 3D, or 4D if dynamic)
+        method : str
+            'enhancement', 'perfusion', 'vascular', or 'all'
+
+        Returns:
+        --------
+        bifurcations : dict
+            cMRI bifurcation metrics
+        """
+        results = {'modality': 'cMRI'}
+
+        # Determine dimensionality
+        is_dynamic = len(cmri_data.shape) == 4
+
+        if is_dynamic:
+            # Dynamic contrast (4D: x, y, z, time)
+            baseline = cmri_data[:, :, :, 0]
+            peak_enhancement = np.max(cmri_data, axis=3)
+        else:
+            # Static contrast
+            if len(cmri_data.shape) == 3:
+                baseline = None
+                peak_enhancement = cmri_data
+            else:
+                baseline = None
+                peak_enhancement = cmri_data
+
+        # Enhancement boundary bifurcations
+        if method in ['enhancement', 'all']:
+            # Detect sharp transitions in contrast enhancement
+            if len(peak_enhancement.shape) == 3:
+                middle_slice = peak_enhancement[:, :, peak_enhancement.shape[2] // 2]
+            else:
+                middle_slice = peak_enhancement
+
+            enhancement_bif = NonLinearAnalyzer.detect_spatial_bifurcations(
+                middle_slice, method='gradient'
+            )
+
+            results['enhancement_bifurcations'] = enhancement_bif['n_bifurcation_pixels']
+            results['enhancement_bifurcation_density'] = enhancement_bif['bifurcation_density']
+            results['enhancement_bifurcation_map'] = enhancement_bif['bifurcation_map']
+
+            # High-intensity region boundaries (likely tumors)
+            high_intensity_threshold = np.percentile(middle_slice, 90)
+            high_regions = middle_slice > high_intensity_threshold
+
+            # Detect boundaries of high-intensity regions
+            from scipy.ndimage import binary_erosion
+            eroded = binary_erosion(high_regions)
+            boundaries = high_regions & ~eroded
+
+            results['high_intensity_boundary_pixels'] = np.sum(boundaries)
+            results['high_intensity_regions'] = np.sum(high_regions)
+
+        # Perfusion bifurcations (if dynamic contrast available)
+        if is_dynamic and method in ['perfusion', 'all']:
+            # Detect temporal transitions in contrast uptake
+            # Average across space
+            global_enhancement = np.mean(cmri_data, axis=(0, 1, 2))
+
+            # Time to peak
+            time_to_peak = np.argmax(global_enhancement)
+
+            # Detect perfusion transitions
+            enhancement_curve_diff = np.abs(np.diff(global_enhancement))
+            threshold = np.mean(enhancement_curve_diff) + 2 * np.std(enhancement_curve_diff)
+            perfusion_transitions = np.where(enhancement_curve_diff > threshold)[0]
+
+            results['perfusion_bifurcations'] = len(perfusion_transitions)
+            results['perfusion_transition_times'] = perfusion_transitions
+            results['time_to_peak'] = time_to_peak
+
+            # Regional perfusion bifurcations
+            regions = NonLinearAnalyzer._divide_fmri_regions(cmri_data)
+            regional_perfusion_bif = []
+
+            for region in regions:
+                if region.size > 0:
+                    region_curve = np.mean(region, axis=(0, 1, 2))
+                    curve_diff = np.abs(np.diff(region_curve))
+                    reg_threshold = np.mean(curve_diff) + 1.5 * np.std(curve_diff)
+                    reg_transitions = np.sum(curve_diff > reg_threshold)
+                    regional_perfusion_bif.append(reg_transitions)
+
+            results['regional_perfusion_bifurcations'] = regional_perfusion_bif
+            results['mean_regional_perfusion_bif'] = np.mean(regional_perfusion_bif)
+
+        # Vascular bifurcations (vessel branching points)
+        if method in ['vascular', 'all']:
+            # Use Laplacian to detect vessel branching
+            if len(peak_enhancement.shape) == 3:
+                middle_slice = peak_enhancement[:, :, peak_enhancement.shape[2] // 2]
+            else:
+                middle_slice = peak_enhancement
+
+            vascular_bif = NonLinearAnalyzer.detect_spatial_bifurcations(
+                middle_slice, method='laplacian'
+            )
+
+            results['vascular_bifurcations'] = vascular_bif['n_bifurcation_pixels']
+            results['vascular_bifurcation_density'] = vascular_bif['bifurcation_density']
+
+        # Total bifurcations
+        total = results.get('enhancement_bifurcations', 0)
+        if 'perfusion_bifurcations' in results:
+            total += results['perfusion_bifurcations']
+
+        results['total_bifurcations'] = total
+
+        return results
+
+    @staticmethod
     def recurrence_based_bifurcation_detection(x, embedding_dim=3, delay=1):
         """
         Detect bifurcations using recurrence plot analysis
@@ -1017,6 +1371,173 @@ class NonLinearAnalyzer:
             'mean_determinism': np.mean(determinisms),
             'recurrence_matrix': recurrence_matrix
         }
+
+
+def detect_bifurcations_by_modality(data, modality_type, **kwargs):
+    """
+    Unified bifurcation detection dispatcher for all modalities
+
+    Parameters:
+    -----------
+    data : array-like or MNE object
+        Data appropriate for the modality
+    modality_type : str
+        'EEG', 'MEG', 'MRI', 'fMRI', or 'cMRI'
+    **kwargs : dict
+        Additional parameters for specific methods
+
+    Returns:
+    --------
+    bifurcations : dict
+        Bifurcation metrics for the modality
+    """
+    if modality_type == 'EEG':
+        # Extract signal if MNE object
+        if hasattr(data, 'get_data'):
+            signal = np.mean(data.get_data(), axis=0)
+        else:
+            signal = np.mean(data, axis=0) if len(data.shape) > 1 else data
+
+        return NonLinearAnalyzer.detect_temporal_bifurcations(
+            signal,
+            window_size=kwargs.get('window_size', None),
+            overlap=kwargs.get('overlap', 0.5)
+        )
+
+    elif modality_type == 'MEG':
+        if hasattr(data, 'get_data'):
+            meg_data = data.get_data()
+        else:
+            meg_data = data
+
+        return NonLinearAnalyzer.detect_meg_bifurcations(
+            meg_data,
+            sfreq=kwargs.get('sfreq', 1000),
+            window_size=kwargs.get('window_size', None),
+            overlap=kwargs.get('overlap', 0.5)
+        )
+
+    elif modality_type == 'MRI':
+        return NonLinearAnalyzer.detect_spatial_bifurcations(
+            data,
+            method=kwargs.get('method', 'gradient')
+        )
+
+    elif modality_type == 'fMRI':
+        return NonLinearAnalyzer.detect_fmri_bifurcations(
+            data,
+            tr=kwargs.get('tr', 2.0),
+            method=kwargs.get('method', 'spatio-temporal')
+        )
+
+    elif modality_type == 'cMRI':
+        return NonLinearAnalyzer.detect_cmri_bifurcations(
+            data,
+            method=kwargs.get('method', 'all')
+        )
+
+    else:
+        raise ValueError(f"Unknown modality type: {modality_type}")
+
+
+def compare_bifurcations_cross_modal(bifurcation_results):
+    """
+    Compare bifurcations across multiple modalities (up to 5x5 matrix)
+
+    Parameters:
+    -----------
+    bifurcation_results : dict
+        Dictionary mapping modality names to their bifurcation results
+        Example: {'EEG': eeg_bif, 'MRI': mri_bif, 'fMRI': fmri_bif}
+
+    Returns:
+    --------
+    comparison : dict
+        Cross-modal bifurcation comparison matrix and metrics
+    """
+    modalities = list(bifurcation_results.keys())
+    n_modalities = len(modalities)
+
+    if n_modalities < 2:
+        return {'error': 'Need at least 2 modalities for comparison'}
+
+    # Extract bifurcation counts for each modality
+    bifurcation_counts = {}
+    bifurcation_densities = {}
+
+    for mod_name, mod_result in bifurcation_results.items():
+        # Get total bifurcations
+        if 'total_bifurcations' in mod_result:
+            bifurcation_counts[mod_name] = mod_result['total_bifurcations']
+        elif 'n_bifurcations' in mod_result:
+            bifurcation_counts[mod_name] = mod_result['n_bifurcations']
+        else:
+            bifurcation_counts[mod_name] = 0
+
+        # Get density if available
+        if 'bifurcation_density' in mod_result:
+            bifurcation_densities[mod_name] = mod_result['bifurcation_density']
+        elif 'spatial_bifurcation_density' in mod_result:
+            bifurcation_densities[mod_name] = mod_result['spatial_bifurcation_density']
+        elif 'temporal_bifurcation_density' in mod_result:
+            bifurcation_densities[mod_name] = mod_result['temporal_bifurcation_density']
+
+    # Create correlation matrix
+    corr_matrix = np.zeros((n_modalities, n_modalities))
+
+    counts_array = np.array([bifurcation_counts[m] for m in modalities])
+
+    for i, mod1 in enumerate(modalities):
+        for j, mod2 in enumerate(modalities):
+            if i == j:
+                corr_matrix[i, j] = 1.0
+            else:
+                # Normalized correlation based on bifurcation counts
+                count1 = bifurcation_counts[mod1]
+                count2 = bifurcation_counts[mod2]
+
+                if count1 > 0 or count2 > 0:
+                    max_count = max(count1, count2)
+                    min_count = min(count1, count2)
+                    corr = min_count / (max_count + 1e-10)
+                else:
+                    corr = 0
+
+                corr_matrix[i, j] = corr
+
+    # Find dominant modality
+    max_bifurcations = max(bifurcation_counts.values())
+    dominant_modality = [m for m, c in bifurcation_counts.items() if c == max_bifurcations][0]
+
+    # Complexity balance
+    complexity_variance = np.var(counts_array)
+    mean_complexity = np.mean(counts_array)
+
+    if mean_complexity > 0:
+        complexity_cv = complexity_variance / mean_complexity
+    else:
+        complexity_cv = 0
+
+    # Interpretation
+    if complexity_cv < 0.3:
+        interpretation = "Balanced: All modalities show similar bifurcation complexity"
+    elif complexity_cv < 0.7:
+        interpretation = f"Moderate imbalance: {dominant_modality} shows more bifurcations"
+    else:
+        interpretation = f"High imbalance: {dominant_modality} dominant, others stable"
+
+    return {
+        'modalities': modalities,
+        'bifurcation_counts': bifurcation_counts,
+        'bifurcation_densities': bifurcation_densities,
+        'correlation_matrix': corr_matrix,
+        'dominant_modality': dominant_modality,
+        'complexity_variance': complexity_variance,
+        'complexity_coefficient_of_variation': complexity_cv,
+        'interpretation': interpretation,
+        'mean_bifurcations': mean_complexity,
+        'total_bifurcations_all_modalities': np.sum(counts_array)
+    }
 
 
 def compute_all_nonlinear_metrics(x, y=None, sfreq=250):
