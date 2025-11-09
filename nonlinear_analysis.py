@@ -1540,6 +1540,582 @@ def compare_bifurcations_cross_modal(bifurcation_results):
     }
 
 
+class TensorAnalyzer:
+    """
+    Tensor-Based Analysis for Multi-Dimensional Neuroimaging Data
+
+    Preserves natural tensor structure instead of flattening to matrices.
+    Much more efficient and preserves spatial/temporal/spectral relationships.
+    """
+
+    @staticmethod
+    def tensor_psd(tensor_data, sfreq, axis=-1, method='welch', nperseg=None):
+        """
+        Power spectral density preserving tensor structure
+
+        Instead of flattening, compute PSD along time axis while preserving
+        spatial dimensions.
+
+        Parameters:
+        -----------
+        tensor_data : ndarray
+            Multi-dimensional data (e.g., channels x time, or x,y,z,time)
+        sfreq : float
+            Sampling frequency
+        axis : int
+            Time axis (default: -1, last axis)
+        method : str
+            'welch' or 'periodogram'
+        nperseg : int
+            Segment length for Welch
+
+        Returns:
+        --------
+        result : dict
+            'freqs': Frequency bins
+            'psd_tensor': PSD with same shape as input (time → freq)
+            'band_power_tensors': Band powers preserving spatial structure
+        """
+        if nperseg is None:
+            nperseg = min(256, tensor_data.shape[axis] // 4)
+
+        # Move time axis to last position
+        tensor_moved = np.moveaxis(tensor_data, axis, -1)
+        original_shape = tensor_moved.shape[:-1]
+
+        # Reshape to (n_positions, n_timepoints)
+        tensor_2d = tensor_moved.reshape(-1, tensor_moved.shape[-1])
+
+        # Compute PSD for all positions at once
+        if method == 'welch':
+            freqs, psd_2d = signal.welch(tensor_2d, fs=sfreq, nperseg=nperseg, axis=-1)
+        elif method == 'periodogram':
+            freqs, psd_2d = signal.periodogram(tensor_2d, fs=sfreq, axis=-1)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Reshape back to original spatial structure + freqs
+        psd_tensor = psd_2d.reshape(*original_shape, len(freqs))
+
+        # Calculate band powers preserving spatial structure
+        bands = {
+            'delta': (0.5, 4),
+            'theta': (4, 8),
+            'alpha': (8, 13),
+            'beta': (13, 30),
+            'gamma': (30, 50)
+        }
+
+        band_power_tensors = {}
+        for band_name, (fmin, fmax) in bands.items():
+            idx = np.logical_and(freqs >= fmin, freqs <= fmax)
+            if np.any(idx):
+                # Integrate over frequency
+                band_power_tensors[band_name] = np.trapz(
+                    psd_tensor[..., idx], freqs[idx], axis=-1
+                )
+            else:
+                band_power_tensors[band_name] = np.zeros(original_shape)
+
+        return {
+            'freqs': freqs,
+            'psd_tensor': psd_tensor,
+            'band_power_tensors': band_power_tensors,
+            'original_shape': tensor_data.shape,
+            'spatial_shape': original_shape
+        }
+
+    @staticmethod
+    def tensor_coherence(tensor1, tensor2, sfreq, axis=-1, nperseg=256):
+        """
+        Coherence between two tensors preserving spatial structure
+
+        Parameters:
+        -----------
+        tensor1, tensor2 : ndarray
+            Multi-dimensional tensors (must have same shape)
+        sfreq : float
+            Sampling frequency
+        axis : int
+            Time axis
+        nperseg : int
+            Segment length
+
+        Returns:
+        --------
+        result : dict
+            'freqs': Frequency bins
+            'coherence_tensor': Coherence preserving spatial structure
+            'mean_coherence_tensor': Mean coherence across frequencies
+        """
+        assert tensor1.shape == tensor2.shape, "Tensors must have same shape"
+
+        # Move time axis to last position
+        t1_moved = np.moveaxis(tensor1, axis, -1)
+        t2_moved = np.moveaxis(tensor2, axis, -1)
+
+        original_shape = t1_moved.shape[:-1]
+
+        # Reshape to (n_positions, n_timepoints)
+        t1_2d = t1_moved.reshape(-1, t1_moved.shape[-1])
+        t2_2d = t2_moved.reshape(-1, t2_moved.shape[-1])
+
+        # Compute coherence for all positions
+        coherence_list = []
+        freqs = None
+
+        for i in range(t1_2d.shape[0]):
+            f, coh = signal.coherence(t1_2d[i], t2_2d[i], fs=sfreq, nperseg=nperseg)
+            coherence_list.append(coh)
+            if freqs is None:
+                freqs = f
+
+        coherence_2d = np.array(coherence_list)
+
+        # Reshape back to tensor
+        coherence_tensor = coherence_2d.reshape(*original_shape, len(freqs))
+
+        # Mean coherence across frequencies
+        mean_coherence_tensor = np.mean(coherence_tensor, axis=-1)
+
+        return {
+            'freqs': freqs,
+            'coherence_tensor': coherence_tensor,
+            'mean_coherence_tensor': mean_coherence_tensor,
+            'spatial_shape': original_shape
+        }
+
+    @staticmethod
+    def tensor_cp_decomposition(tensor_data, rank=3, max_iter=100):
+        """
+        CP/PARAFAC tensor decomposition
+
+        Decomposes N-way tensor into sum of rank-1 tensors:
+        X ≈ Σ λᵣ (a_r ⊗ b_r ⊗ c_r ⊗ ...)
+
+        Parameters:
+        -----------
+        tensor_data : ndarray
+            N-dimensional tensor
+        rank : int
+            Number of components
+        max_iter : int
+            Maximum iterations
+
+        Returns:
+        --------
+        result : dict
+            'factors': List of factor matrices (one per mode)
+            'weights': Component weights
+            'reconstruction': Reconstructed tensor
+            'error': Reconstruction error
+        """
+        try:
+            import tensorly as tl
+            from tensorly.decomposition import parafac
+
+            # Convert to tensorly tensor
+            tl_tensor = tl.tensor(tensor_data)
+
+            # CP decomposition
+            cp_tensor = parafac(tl_tensor, rank=rank, n_iter_max=max_iter)
+
+            # Extract factors and weights
+            weights, factors = cp_tensor
+
+            # Reconstruct
+            reconstruction = tl.cp_to_tensor(cp_tensor)
+
+            # Error
+            error = np.linalg.norm(tensor_data - reconstruction) / np.linalg.norm(tensor_data)
+
+            return {
+                'factors': factors,
+                'weights': weights,
+                'reconstruction': reconstruction,
+                'error': error,
+                'rank': rank,
+                'n_modes': len(factors)
+            }
+
+        except ImportError:
+            # Fallback: Simple alternating least squares
+            return TensorAnalyzer._simple_cp_als(tensor_data, rank, max_iter)
+
+    @staticmethod
+    def _simple_cp_als(tensor_data, rank, max_iter):
+        """Simple CP-ALS implementation without tensorly"""
+        ndim = tensor_data.ndim
+        shape = tensor_data.shape
+
+        # Initialize factor matrices randomly
+        factors = [np.random.rand(shape[i], rank) for i in range(ndim)]
+
+        for iteration in range(max_iter):
+            for mode in range(ndim):
+                # Matricize tensor along mode
+                unfolding = TensorAnalyzer._unfold_tensor(tensor_data, mode)
+
+                # Compute Khatri-Rao product of all factors except mode
+                kr_product = TensorAnalyzer._khatri_rao([factors[i] for i in range(ndim) if i != mode])
+
+                # Update factor
+                factors[mode] = unfolding @ kr_product @ np.linalg.pinv(kr_product.T @ kr_product)
+
+        # Weights (norms of factors)
+        weights = np.array([np.linalg.norm(factors[0][:, r]) for r in range(rank)])
+
+        # Normalize factors
+        for mode in range(ndim):
+            for r in range(rank):
+                norm = np.linalg.norm(factors[mode][:, r])
+                if norm > 0:
+                    factors[mode][:, r] /= norm
+
+        # Reconstruct
+        reconstruction = TensorAnalyzer._cp_reconstruct(factors, weights)
+
+        # Error
+        error = np.linalg.norm(tensor_data - reconstruction) / np.linalg.norm(tensor_data)
+
+        return {
+            'factors': factors,
+            'weights': weights,
+            'reconstruction': reconstruction,
+            'error': error,
+            'rank': rank,
+            'n_modes': ndim
+        }
+
+    @staticmethod
+    def tensor_tucker_decomposition(tensor_data, ranks=None, max_iter=100):
+        """
+        Tucker tensor decomposition
+
+        Decomposes tensor as: X ≈ G ×₁ A ×₂ B ×₃ C ...
+
+        Parameters:
+        -----------
+        tensor_data : ndarray
+            N-dimensional tensor
+        ranks : list of int
+            Rank for each mode (default: half of each dimension)
+        max_iter : int
+            Maximum iterations
+
+        Returns:
+        --------
+        result : dict
+            'core': Core tensor
+            'factors': List of factor matrices
+            'reconstruction': Reconstructed tensor
+            'error': Reconstruction error
+        """
+        try:
+            import tensorly as tl
+            from tensorly.decomposition import tucker
+
+            if ranks is None:
+                ranks = [max(1, s // 2) for s in tensor_data.shape]
+
+            # Convert to tensorly tensor
+            tl_tensor = tl.tensor(tensor_data)
+
+            # Tucker decomposition
+            tucker_tensor = tucker(tl_tensor, rank=ranks, n_iter_max=max_iter)
+
+            # Extract core and factors
+            core, factors = tucker_tensor
+
+            # Reconstruct
+            reconstruction = tl.tucker_to_tensor(tucker_tensor)
+
+            # Error
+            error = np.linalg.norm(tensor_data - reconstruction) / np.linalg.norm(tensor_data)
+
+            return {
+                'core': core,
+                'factors': factors,
+                'reconstruction': reconstruction,
+                'error': error,
+                'ranks': ranks,
+                'compression_ratio': np.prod(tensor_data.shape) / (
+                    np.prod(core.shape) + sum(f.size for f in factors)
+                )
+            }
+
+        except ImportError:
+            # Fallback: Higher-Order SVD (HOSVD)
+            return TensorAnalyzer._hosvd(tensor_data, ranks)
+
+    @staticmethod
+    def _hosvd(tensor_data, ranks):
+        """Higher-Order SVD (deterministic Tucker approximation)"""
+        if ranks is None:
+            ranks = [max(1, s // 2) for s in tensor_data.shape]
+
+        ndim = tensor_data.ndim
+        factors = []
+
+        # Compute factor matrices via SVD of unfoldings
+        for mode in range(ndim):
+            unfolding = TensorAnalyzer._unfold_tensor(tensor_data, mode)
+            U, S, Vt = np.linalg.svd(unfolding, full_matrices=False)
+            factors.append(U[:, :ranks[mode]])
+
+        # Compute core tensor
+        core = tensor_data.copy()
+        for mode in range(ndim):
+            core = TensorAnalyzer._mode_n_product(core, factors[mode].T, mode)
+
+        # Reconstruct
+        reconstruction = core.copy()
+        for mode in range(ndim):
+            reconstruction = TensorAnalyzer._mode_n_product(reconstruction, factors[mode], mode)
+
+        # Error
+        error = np.linalg.norm(tensor_data - reconstruction) / np.linalg.norm(tensor_data)
+
+        return {
+            'core': core,
+            'factors': factors,
+            'reconstruction': reconstruction,
+            'error': error,
+            'ranks': ranks,
+            'compression_ratio': np.prod(tensor_data.shape) / (
+                np.prod(core.shape) + sum(f.size for f in factors)
+            )
+        }
+
+    @staticmethod
+    def _unfold_tensor(tensor_data, mode):
+        """Unfold tensor along specified mode (matricization)"""
+        shape = tensor_data.shape
+        new_shape = (shape[mode], -1)
+        # Move mode to front, then reshape
+        axes = [mode] + [i for i in range(len(shape)) if i != mode]
+        return np.moveaxis(tensor_data, axes, range(len(axes))).reshape(new_shape)
+
+    @staticmethod
+    def _mode_n_product(tensor_data, matrix, mode):
+        """Mode-n product: tensor ×_n matrix"""
+        shape = tensor_data.shape
+        # Unfold tensor along mode
+        unfolding = TensorAnalyzer._unfold_tensor(tensor_data, mode)
+        # Matrix multiply
+        result = matrix @ unfolding
+        # Fold back
+        new_shape = list(shape)
+        new_shape[mode] = matrix.shape[0]
+        # Reshape and move axis back
+        result_tensor = result.reshape([new_shape[mode]] + [new_shape[i] for i in range(len(shape)) if i != mode])
+        axes = list(range(1, mode + 1)) + [0] + list(range(mode + 1, len(shape)))
+        return np.moveaxis(result_tensor, range(len(axes)), axes)
+
+    @staticmethod
+    def _khatri_rao(matrices):
+        """Khatri-Rao product (column-wise Kronecker)"""
+        if len(matrices) == 1:
+            return matrices[0]
+
+        result = matrices[0]
+        for mat in matrices[1:]:
+            n_cols = result.shape[1]
+            kr = np.zeros((result.shape[0] * mat.shape[0], n_cols))
+            for col in range(n_cols):
+                kr[:, col] = np.kron(result[:, col], mat[:, col])
+            result = kr
+
+        return result
+
+    @staticmethod
+    def _cp_reconstruct(factors, weights):
+        """Reconstruct tensor from CP factors"""
+        rank = len(weights)
+        ndim = len(factors)
+
+        # Initialize reconstruction
+        shape = tuple(f.shape[0] for f in factors)
+        reconstruction = np.zeros(shape)
+
+        # Sum rank-1 tensors
+        for r in range(rank):
+            # Outer product of all factors for component r
+            rank1_tensor = factors[0][:, r]
+            for mode in range(1, ndim):
+                rank1_tensor = np.multiply.outer(rank1_tensor, factors[mode][:, r])
+
+            reconstruction += weights[r] * rank1_tensor
+
+        return reconstruction
+
+    @staticmethod
+    def tensor_bifurcation_detection(tensor_data, axis=-1, method='gradient', threshold=None):
+        """
+        Detect bifurcations in tensor data preserving spatial structure
+
+        Parameters:
+        -----------
+        tensor_data : ndarray
+            Multi-dimensional tensor
+        axis : int
+            Temporal axis along which to detect bifurcations
+        method : str
+            'gradient', 'variance', or 'spectral'
+        threshold : float
+            Detection threshold (auto if None)
+
+        Returns:
+        --------
+        result : dict
+            'bifurcation_tensor': Binary tensor marking bifurcations
+            'bifurcation_strength': Strength at each position
+            'bifurcation_times': Time indices where bifurcations occur
+        """
+        # Move time axis to last position
+        tensor_moved = np.moveaxis(tensor_data, axis, -1)
+        spatial_shape = tensor_moved.shape[:-1]
+        n_timepoints = tensor_moved.shape[-1]
+
+        if method == 'gradient':
+            # Temporal gradient (preserving spatial structure)
+            gradient = np.abs(np.diff(tensor_moved, axis=-1))
+
+            # Detection threshold
+            if threshold is None:
+                threshold = np.mean(gradient) + 2 * np.std(gradient)
+
+            # Bifurcations
+            bifurcation_binary = gradient > threshold
+
+            # Strength
+            bifurcation_strength = gradient
+
+        elif method == 'variance':
+            # Sliding window variance
+            window_size = min(10, n_timepoints // 10)
+            variances = np.zeros_like(tensor_moved)
+
+            for t in range(n_timepoints - window_size):
+                window = tensor_moved[..., t:t+window_size]
+                variances[..., t] = np.var(window, axis=-1)
+
+            # Detection
+            if threshold is None:
+                threshold = np.mean(variances) + 2 * np.std(variances)
+
+            bifurcation_binary = variances > threshold
+            bifurcation_strength = variances
+
+        elif method == 'spectral':
+            # Spectral bifurcations preserving tensor structure
+            tensor_2d = tensor_moved.reshape(-1, n_timepoints)
+            spectral_changes = np.zeros((tensor_2d.shape[0], n_timepoints - 1))
+
+            window_size = min(256, n_timepoints // 4)
+            for i in range(tensor_2d.shape[0]):
+                for t in range(0, n_timepoints - window_size - 1, window_size // 2):
+                    w1 = tensor_2d[i, t:t+window_size]
+                    w2 = tensor_2d[i, t+window_size//2:t+3*window_size//2]
+
+                    if len(w2) >= window_size:
+                        fft1 = np.abs(np.fft.rfft(w1))
+                        fft2 = np.abs(np.fft.rfft(w2))
+
+                        peak1 = np.argmax(fft1)
+                        peak2 = np.argmax(fft2)
+
+                        change = abs(peak1 - peak2)
+                        t_idx = t + window_size // 2
+                        if t_idx < spectral_changes.shape[1]:
+                            spectral_changes[i, t_idx] = change
+
+            # Reshape back
+            bifurcation_strength = spectral_changes.reshape(*spatial_shape, -1)
+
+            if threshold is None:
+                threshold = np.mean(spectral_changes) + 2 * np.std(spectral_changes)
+
+            bifurcation_binary = bifurcation_strength > threshold
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Find time indices with bifurcations (anywhere in spatial dims)
+        bifurcation_per_time = np.any(bifurcation_binary.reshape(-1, bifurcation_binary.shape[-1]), axis=0)
+        bifurcation_times = np.where(bifurcation_per_time)[0]
+
+        return {
+            'bifurcation_tensor': bifurcation_binary,
+            'bifurcation_strength': bifurcation_strength,
+            'bifurcation_times': bifurcation_times,
+            'n_bifurcations': len(bifurcation_times),
+            'spatial_shape': spatial_shape,
+            'method': method
+        }
+
+    @staticmethod
+    def tensor_einsum_correlation(tensor1, tensor2, mode='spatial'):
+        """
+        Efficient tensor correlation using einsum
+
+        Parameters:
+        -----------
+        tensor1, tensor2 : ndarray
+            Tensors to correlate
+        mode : str
+            'spatial': Correlate spatial patterns across time
+            'temporal': Correlate temporal patterns across space
+            'full': Full tensor correlation
+
+        Returns:
+        --------
+        correlation : float or ndarray
+            Correlation value(s)
+        """
+        # Normalize tensors
+        t1_normalized = (tensor1 - np.mean(tensor1)) / (np.std(tensor1) + 1e-10)
+        t2_normalized = (tensor2 - np.mean(tensor2)) / (np.std(tensor2) + 1e-10)
+
+        if mode == 'full':
+            # Full tensor correlation (single value)
+            correlation = np.sum(t1_normalized * t2_normalized) / tensor1.size
+
+        elif mode == 'spatial':
+            # For each time point, correlate spatial patterns
+            # Assumes last axis is time
+            n_time = tensor1.shape[-1]
+            t1_spatial = t1_normalized.reshape(-1, n_time)
+            t2_spatial = t2_normalized.reshape(-1, n_time)
+
+            # Correlation at each time point
+            correlation = np.array([
+                np.corrcoef(t1_spatial[:, t], t2_spatial[:, t])[0, 1]
+                for t in range(n_time)
+            ])
+
+        elif mode == 'temporal':
+            # For each spatial location, correlate time series
+            # Assumes last axis is time
+            n_spatial = np.prod(tensor1.shape[:-1])
+            t1_temporal = t1_normalized.reshape(n_spatial, -1)
+            t2_temporal = t2_normalized.reshape(n_spatial, -1)
+
+            # Correlation at each spatial location
+            correlation = np.array([
+                np.corrcoef(t1_temporal[s], t2_temporal[s])[0, 1]
+                for s in range(n_spatial)
+            ])
+
+            # Reshape back to spatial dimensions
+            correlation = correlation.reshape(tensor1.shape[:-1])
+
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        return correlation
+
+
 class TransformAnalyzer:
     """
     Transform-Based Analysis for Neuroimaging Data

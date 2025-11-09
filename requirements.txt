@@ -29,6 +29,9 @@ pyedflib>=0.1.30
 # For wavelet analysis
 pywavelets>=1.4.0
 
+# Optional: For tensor decomposition (HIGHLY RECOMMENDED)
+# tensorly>=0.8.0  # CP, Tucker decompositions
+
 # Optional: For Hilbert-Huang Transform (EMD)
 # PyEMD>=1.0.0  # Empirical Mode Decomposition
 
