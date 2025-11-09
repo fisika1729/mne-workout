@@ -1540,6 +1540,513 @@ def compare_bifurcations_cross_modal(bifurcation_results):
     }
 
 
+class TransformAnalyzer:
+    """
+    Transform-Based Analysis for Neuroimaging Data
+
+    Uses Fourier, Wavelet, and other transforms to simplify calculations
+    and extract frequency-domain features essential for neuroimaging.
+    """
+
+    @staticmethod
+    def power_spectral_density(signal_data, sfreq, method='welch', nperseg=None):
+        """
+        Calculate power spectral density using FFT-based methods
+
+        Parameters:
+        -----------
+        signal_data : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        method : str
+            'welch' (recommended), 'periodogram', or 'multitaper'
+        nperseg : int
+            Segment length for Welch method (default: 256)
+
+        Returns:
+        --------
+        result : dict
+            'freqs': Frequency bins
+            'psd': Power spectral density
+            'total_power': Total power
+            'band_powers': Power in standard frequency bands
+        """
+        if nperseg is None:
+            nperseg = min(256, len(signal_data) // 4)
+
+        if method == 'welch':
+            freqs, psd = signal.welch(signal_data, fs=sfreq, nperseg=nperseg)
+        elif method == 'periodogram':
+            freqs, psd = signal.periodogram(signal_data, fs=sfreq)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Calculate band powers (for EEG/MEG)
+        bands = {
+            'delta': (0.5, 4),
+            'theta': (4, 8),
+            'alpha': (8, 13),
+            'beta': (13, 30),
+            'gamma': (30, 50)
+        }
+
+        band_powers = {}
+        for band_name, (fmin, fmax) in bands.items():
+            idx = np.logical_and(freqs >= fmin, freqs <= fmax)
+            if np.any(idx):
+                band_powers[band_name] = np.trapz(psd[idx], freqs[idx])
+            else:
+                band_powers[band_name] = 0
+
+        total_power = np.trapz(psd, freqs)
+
+        return {
+            'freqs': freqs,
+            'psd': psd,
+            'total_power': total_power,
+            'band_powers': band_powers,
+            'dominant_freq': freqs[np.argmax(psd)],
+            'peak_power': np.max(psd)
+        }
+
+    @staticmethod
+    def wavelet_transform(signal_data, sfreq, wavelet='morl', scales=None):
+        """
+        Continuous Wavelet Transform (CWT) for time-frequency analysis
+
+        Parameters:
+        -----------
+        signal_data : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        wavelet : str
+            Wavelet name ('morl', 'cmor', 'mexh', etc.)
+        scales : array-like
+            Scales to use (default: auto-generate)
+
+        Returns:
+        --------
+        result : dict
+            'coefficients': Wavelet coefficients (scales x time)
+            'freqs': Corresponding frequencies
+            'scales': Scales used
+            'power': Time-frequency power |coef|²
+        """
+        import pywt
+
+        if scales is None:
+            # Auto-generate scales for 0.5 Hz to Nyquist
+            freqs_desired = np.linspace(0.5, sfreq / 2, 50)
+            scales = pywt.frequency2scale(wavelet, freqs_desired) / sfreq
+
+        # Compute CWT
+        coefficients, freqs = pywt.cwt(
+            signal_data,
+            scales,
+            wavelet,
+            sampling_period=1/sfreq
+        )
+
+        # Time-frequency power
+        power = np.abs(coefficients) ** 2
+
+        return {
+            'coefficients': coefficients,
+            'freqs': freqs,
+            'scales': scales,
+            'power': power,
+            'time': np.arange(len(signal_data)) / sfreq
+        }
+
+    @staticmethod
+    def short_time_fourier_transform(signal_data, sfreq, nperseg=256, noverlap=None):
+        """
+        Short-Time Fourier Transform (STFT) for spectrogram
+
+        Parameters:
+        -----------
+        signal_data : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        nperseg : int
+            Segment length
+        noverlap : int
+            Overlap length (default: nperseg // 2)
+
+        Returns:
+        --------
+        result : dict
+            'freqs': Frequency bins
+            'times': Time bins
+            'spectrogram': STFT magnitude (freqs x times)
+            'phase': STFT phase
+        """
+        if noverlap is None:
+            noverlap = nperseg // 2
+
+        freqs, times, Zxx = signal.stft(
+            signal_data,
+            fs=sfreq,
+            nperseg=nperseg,
+            noverlap=noverlap
+        )
+
+        magnitude = np.abs(Zxx)
+        phase = np.angle(Zxx)
+
+        return {
+            'freqs': freqs,
+            'times': times,
+            'spectrogram': magnitude,
+            'phase': phase,
+            'complex': Zxx
+        }
+
+    @staticmethod
+    def coherence_analysis(signal1, signal2, sfreq, nperseg=256):
+        """
+        Magnitude-squared coherence between two signals (FFT-based)
+
+        Coherence measures linear correlation in frequency domain
+
+        Parameters:
+        -----------
+        signal1, signal2 : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        nperseg : int
+            Segment length
+
+        Returns:
+        --------
+        result : dict
+            'freqs': Frequency bins
+            'coherence': Coherence values [0, 1]
+            'mean_coherence': Average across frequencies
+            'band_coherence': Coherence per frequency band
+        """
+        freqs, coh = signal.coherence(signal1, signal2, fs=sfreq, nperseg=nperseg)
+
+        # Band-specific coherence
+        bands = {
+            'delta': (0.5, 4),
+            'theta': (4, 8),
+            'alpha': (8, 13),
+            'beta': (13, 30),
+            'gamma': (30, 50)
+        }
+
+        band_coherence = {}
+        for band_name, (fmin, fmax) in bands.items():
+            idx = np.logical_and(freqs >= fmin, freqs <= fmax)
+            if np.any(idx):
+                band_coherence[band_name] = np.mean(coh[idx])
+            else:
+                band_coherence[band_name] = 0
+
+        return {
+            'freqs': freqs,
+            'coherence': coh,
+            'mean_coherence': np.mean(coh),
+            'band_coherence': band_coherence
+        }
+
+    @staticmethod
+    def cross_spectral_density(signal1, signal2, sfreq, nperseg=256):
+        """
+        Cross-spectral density between two signals
+
+        Parameters:
+        -----------
+        signal1, signal2 : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        nperseg : int
+            Segment length
+
+        Returns:
+        --------
+        result : dict
+            'freqs': Frequency bins
+            'csd': Cross-spectral density (complex)
+            'magnitude': |CSD|
+            'phase': Phase difference
+        """
+        freqs, csd = signal.csd(signal1, signal2, fs=sfreq, nperseg=nperseg)
+
+        magnitude = np.abs(csd)
+        phase = np.angle(csd)
+
+        return {
+            'freqs': freqs,
+            'csd': csd,
+            'magnitude': magnitude,
+            'phase': phase
+        }
+
+    @staticmethod
+    def frequency_domain_bifurcation_detection(signal_data, sfreq, method='spectral_edge'):
+        """
+        Detect bifurcations using frequency-domain features
+
+        Bifurcations often manifest as spectral changes (peak shifts,
+        bandwidth changes, power redistribution)
+
+        Parameters:
+        -----------
+        signal_data : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        method : str
+            'spectral_edge', 'peak_shift', 'bandwidth_change'
+
+        Returns:
+        --------
+        result : dict
+            'bifurcation_indices': Time points of bifurcations
+            'spectral_features': Time-varying spectral features
+            'bifurcation_scores': Bifurcation strength
+        """
+        # Use STFT to get time-varying spectrum
+        nperseg = min(256, len(signal_data) // 10)
+        stft_result = TransformAnalyzer.short_time_fourier_transform(
+            signal_data, sfreq, nperseg=nperseg
+        )
+
+        times = stft_result['times']
+        spectrogram = stft_result['spectrogram']
+        freqs = stft_result['freqs']
+
+        if method == 'spectral_edge':
+            # Spectral edge frequency (95% power threshold)
+            spectral_edges = []
+            for t_idx in range(spectrogram.shape[1]):
+                psd = spectrogram[:, t_idx]
+                cumsum = np.cumsum(psd)
+                total = cumsum[-1]
+                if total > 0:
+                    threshold_idx = np.where(cumsum >= 0.95 * total)[0]
+                    if len(threshold_idx) > 0:
+                        spectral_edges.append(freqs[threshold_idx[0]])
+                    else:
+                        spectral_edges.append(freqs[-1])
+                else:
+                    spectral_edges.append(0)
+
+            spectral_edges = np.array(spectral_edges)
+
+            # Bifurcations = large changes in spectral edge
+            edge_diff = np.abs(np.diff(spectral_edges))
+            threshold = np.mean(edge_diff) + 2 * np.std(edge_diff)
+            bifurcation_indices = np.where(edge_diff > threshold)[0]
+            bifurcation_scores = edge_diff[bifurcation_indices]
+
+        elif method == 'peak_shift':
+            # Dominant frequency shifts
+            peak_freqs = []
+            for t_idx in range(spectrogram.shape[1]):
+                psd = spectrogram[:, t_idx]
+                peak_freqs.append(freqs[np.argmax(psd)])
+
+            peak_freqs = np.array(peak_freqs)
+
+            # Bifurcations = sudden peak shifts
+            peak_diff = np.abs(np.diff(peak_freqs))
+            threshold = np.mean(peak_diff) + 2 * np.std(peak_diff)
+            bifurcation_indices = np.where(peak_diff > threshold)[0]
+            bifurcation_scores = peak_diff[bifurcation_indices]
+
+        elif method == 'bandwidth_change':
+            # Spectral bandwidth changes
+            bandwidths = []
+            for t_idx in range(spectrogram.shape[1]):
+                psd = spectrogram[:, t_idx]
+                if psd.sum() > 0:
+                    psd_norm = psd / psd.sum()
+                    mean_freq = np.sum(freqs * psd_norm)
+                    variance = np.sum(((freqs - mean_freq) ** 2) * psd_norm)
+                    bandwidth = np.sqrt(variance)
+                    bandwidths.append(bandwidth)
+                else:
+                    bandwidths.append(0)
+
+            bandwidths = np.array(bandwidths)
+
+            # Bifurcations = large bandwidth changes
+            bw_diff = np.abs(np.diff(bandwidths))
+            threshold = np.mean(bw_diff) + 2 * np.std(bw_diff)
+            bifurcation_indices = np.where(bw_diff > threshold)[0]
+            bifurcation_scores = bw_diff[bifurcation_indices]
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Map back to original time indices
+        time_per_segment = times[1] - times[0] if len(times) > 1 else 1
+        original_indices = (bifurcation_indices * sfreq * time_per_segment).astype(int)
+
+        return {
+            'bifurcation_indices': original_indices,
+            'bifurcation_times': times[bifurcation_indices] if len(bifurcation_indices) > 0 else np.array([]),
+            'bifurcation_scores': bifurcation_scores,
+            'spectral_features': {
+                'times': times,
+                'spectrogram': spectrogram,
+                'freqs': freqs
+            },
+            'n_bifurcations': len(bifurcation_indices)
+        }
+
+    @staticmethod
+    def hilbert_huang_transform(signal_data, sfreq, n_imfs=5):
+        """
+        Hilbert-Huang Transform (EMD + Hilbert)
+
+        Decomposes signal into Intrinsic Mode Functions (IMFs) and
+        calculates instantaneous frequency/amplitude
+
+        Parameters:
+        -----------
+        signal_data : array-like
+            Time series data
+        sfreq : float
+            Sampling frequency
+        n_imfs : int
+            Maximum number of IMFs to extract
+
+        Returns:
+        --------
+        result : dict
+            'imfs': Intrinsic Mode Functions
+            'instantaneous_freqs': Instantaneous frequencies per IMF
+            'instantaneous_amps': Instantaneous amplitudes per IMF
+            'hilbert_spectrum': Time-frequency representation
+        """
+        try:
+            from PyEMD import EMD
+        except ImportError:
+            # Fallback: Simple implementation
+            return TransformAnalyzer._simple_emd(signal_data, sfreq, n_imfs)
+
+        # Empirical Mode Decomposition
+        emd = EMD()
+        imfs = emd(signal_data, max_imf=n_imfs)
+
+        # Hilbert transform of each IMF
+        instantaneous_freqs = []
+        instantaneous_amps = []
+
+        for imf in imfs:
+            analytic_signal = signal.hilbert(imf)
+            amplitude = np.abs(analytic_signal)
+            phase = np.unwrap(np.angle(analytic_signal))
+            inst_freq = np.diff(phase) / (2.0 * np.pi) * sfreq
+            inst_freq = np.append(inst_freq, inst_freq[-1])  # Maintain length
+
+            instantaneous_amps.append(amplitude)
+            instantaneous_freqs.append(inst_freq)
+
+        return {
+            'imfs': imfs,
+            'instantaneous_freqs': np.array(instantaneous_freqs),
+            'instantaneous_amps': np.array(instantaneous_amps),
+            'time': np.arange(len(signal_data)) / sfreq,
+            'n_imfs': len(imfs)
+        }
+
+    @staticmethod
+    def _simple_emd(signal_data, sfreq, n_imfs):
+        """Simple EMD fallback if PyEMD not available"""
+        # Basic implementation using filtering
+        imfs = []
+        residue = signal_data.copy()
+
+        for i in range(n_imfs):
+            if len(residue) < 10:
+                break
+
+            # Use bandpass filter as simple IMF extraction
+            nyq = sfreq / 2
+            low = max(0.5, nyq / (2 ** (i + 2)))
+            high = min(nyq - 1, nyq / (2 ** (i + 1)))
+
+            if low >= high:
+                break
+
+            try:
+                sos = signal.butter(4, [low, high], btype='band', fs=sfreq, output='sos')
+                imf = signal.sosfilt(sos, residue)
+                imfs.append(imf)
+                residue = residue - imf
+            except:
+                break
+
+        imfs = np.array(imfs) if imfs else np.array([signal_data])
+
+        # Hilbert analysis
+        instantaneous_freqs = []
+        instantaneous_amps = []
+
+        for imf in imfs:
+            analytic_signal = signal.hilbert(imf)
+            amplitude = np.abs(analytic_signal)
+            phase = np.unwrap(np.angle(analytic_signal))
+            inst_freq = np.diff(phase) / (2.0 * np.pi) * sfreq
+            inst_freq = np.append(inst_freq, inst_freq[-1])
+
+            instantaneous_amps.append(amplitude)
+            instantaneous_freqs.append(inst_freq)
+
+        return {
+            'imfs': imfs,
+            'instantaneous_freqs': np.array(instantaneous_freqs),
+            'instantaneous_amps': np.array(instantaneous_amps),
+            'time': np.arange(len(signal_data)) / sfreq,
+            'n_imfs': len(imfs)
+        }
+
+    @staticmethod
+    def fft_based_correlation(signal1, signal2):
+        """
+        Fast correlation using FFT (O(n log n) instead of O(n²))
+
+        Parameters:
+        -----------
+        signal1, signal2 : array-like
+            Signals to correlate
+
+        Returns:
+        --------
+        correlation : array-like
+            Cross-correlation
+        """
+        # Ensure same length
+        n = len(signal1)
+        m = len(signal2)
+        length = max(n, m)
+
+        # Zero-pad to next power of 2 for efficiency
+        fft_len = 2 ** int(np.ceil(np.log2(2 * length - 1)))
+
+        # FFT-based correlation
+        fft1 = np.fft.fft(signal1, n=fft_len)
+        fft2 = np.fft.fft(signal2, n=fft_len)
+
+        # Cross-correlation in frequency domain
+        correlation = np.fft.ifft(fft1 * np.conj(fft2)).real
+
+        # Return relevant portion
+        correlation = correlation[:length]
+
+        return correlation
+
+
 class FuzzySetAnalyzer:
     """
     Fuzzy Set Theory Analysis for Neuroimaging Data
@@ -2418,6 +2925,218 @@ def compare_bifurcations_cross_modal_fuzzy(bifurcation_results, use_fuzzy=True):
         'fuzzy_similarity_matrix': fuzzy_comparison['fuzzy_similarity_matrix'] if fuzzy_comparison else None,
         'most_similar_pair_fuzzy': fuzzy_comparison['most_similar_pair'] if fuzzy_comparison else None,
         'mean_fuzzy_similarity': fuzzy_comparison['mean_similarity'] if fuzzy_comparison else None
+    }
+
+
+def detect_bifurcations_transform_based(signal_data, modality_type, sfreq=None, **kwargs):
+    """
+    Unified transform-based bifurcation detection for all modalities
+
+    Combines time-domain AND frequency-domain analysis for robust detection
+
+    Parameters:
+    -----------
+    signal_data : ndarray
+        Neuroimaging data
+    modality_type : str
+        'EEG', 'MEG', 'MRI', 'fMRI', or 'cMRI'
+    sfreq : float
+        Sampling frequency (for EEG/MEG/fMRI)
+    **kwargs : dict
+        Additional parameters
+
+    Returns:
+    --------
+    result : dict
+        Combined time-domain + frequency-domain bifurcation analysis
+    """
+    modality_type = modality_type.upper()
+
+    # Time-domain bifurcations (existing methods)
+    time_domain = detect_bifurcations_by_modality(
+        signal_data, modality_type, **kwargs
+    )
+
+    result = {'time_domain': time_domain}
+
+    # Add frequency-domain analysis for temporal modalities
+    if modality_type in ['EEG', 'MEG', 'FMRI'] and sfreq is not None:
+        # Use global signal for frequency analysis
+        if signal_data.ndim == 2:  # EEG/MEG: channels x time
+            global_signal = np.mean(signal_data, axis=0)
+        elif signal_data.ndim == 4:  # fMRI: x,y,z,time
+            global_signal = np.mean(signal_data, axis=(0, 1, 2))
+        else:
+            global_signal = signal_data.flatten()
+
+        # Frequency-domain bifurcation detection (3 methods)
+        freq_bifurcations = {}
+        for method in ['spectral_edge', 'peak_shift', 'bandwidth_change']:
+            try:
+                freq_result = TransformAnalyzer.frequency_domain_bifurcation_detection(
+                    global_signal, sfreq, method=method
+                )
+                freq_bifurcations[method] = freq_result
+            except:
+                freq_bifurcations[method] = None
+
+        # Power spectral density
+        try:
+            psd = TransformAnalyzer.power_spectral_density(global_signal, sfreq)
+            result['psd'] = psd
+        except:
+            result['psd'] = None
+
+        # Wavelet transform
+        try:
+            wavelet = TransformAnalyzer.wavelet_transform(global_signal, sfreq)
+            result['wavelet'] = wavelet
+        except:
+            result['wavelet'] = None
+
+        result['frequency_domain'] = freq_bifurcations
+
+        # Combine bifurcations from both domains
+        time_bif_indices = time_domain.get('bifurcation_indices', np.array([]))
+        freq_bif_indices_combined = []
+
+        for method, freq_result in freq_bifurcations.items():
+            if freq_result is not None:
+                freq_bif_indices_combined.extend(freq_result['bifurcation_indices'])
+
+        freq_bif_indices_combined = np.unique(freq_bif_indices_combined)
+
+        result['combined_bifurcations'] = {
+            'time_domain_count': len(time_bif_indices),
+            'frequency_domain_count': len(freq_bif_indices_combined),
+            'time_domain_indices': time_bif_indices,
+            'frequency_domain_indices': freq_bif_indices_combined,
+            'consensus': np.intersect1d(time_bif_indices, freq_bif_indices_combined)
+        }
+
+    return result
+
+
+def compute_transform_features(signal_data, sfreq, analysis_type='full'):
+    """
+    Compute comprehensive transform-based features
+
+    Parameters:
+    -----------
+    signal_data : array-like
+        Time series data
+    sfreq : float
+        Sampling frequency
+    analysis_type : str
+        'full', 'spectral_only', 'wavelet_only', or 'fast'
+
+    Returns:
+    --------
+    features : dict
+        All transform-based features
+    """
+    features = {}
+
+    if analysis_type in ['full', 'spectral_only', 'fast']:
+        # Power spectral density
+        psd_result = TransformAnalyzer.power_spectral_density(signal_data, sfreq)
+        features['psd'] = psd_result
+        features['dominant_freq'] = psd_result['dominant_freq']
+        features['total_power'] = psd_result['total_power']
+        features['band_powers'] = psd_result['band_powers']
+
+        # Spectral ratios (clinical biomarkers)
+        bp = psd_result['band_powers']
+        features['theta_beta_ratio'] = bp['theta'] / (bp['beta'] + 1e-10)
+        features['alpha_theta_ratio'] = bp['alpha'] / (bp['theta'] + 1e-10)
+
+    if analysis_type in ['full', 'wavelet_only']:
+        # Wavelet transform
+        try:
+            wavelet_result = TransformAnalyzer.wavelet_transform(signal_data, sfreq)
+            features['wavelet'] = wavelet_result
+            features['wavelet_entropy'] = -np.sum(
+                wavelet_result['power'] * np.log2(wavelet_result['power'] + 1e-10)
+            )
+        except:
+            features['wavelet'] = None
+            features['wavelet_entropy'] = 0
+
+    if analysis_type == 'full':
+        # STFT
+        stft_result = TransformAnalyzer.short_time_fourier_transform(signal_data, sfreq)
+        features['stft'] = stft_result
+
+        # Hilbert-Huang Transform
+        try:
+            hht_result = TransformAnalyzer.hilbert_huang_transform(signal_data, sfreq)
+            features['hht'] = hht_result
+            features['n_imfs'] = hht_result['n_imfs']
+        except:
+            features['hht'] = None
+            features['n_imfs'] = 0
+
+    return features
+
+
+def compute_cross_modal_coherence(modality_data_dict, sfreq_dict):
+    """
+    Compute coherence between all modality pairs (for temporal modalities)
+
+    Parameters:
+    -----------
+    modality_data_dict : dict
+        Dictionary mapping modality names to their signals
+    sfreq_dict : dict
+        Dictionary mapping modality names to their sampling frequencies
+
+    Returns:
+    --------
+    result : dict
+        Coherence matrix and band-specific coherences
+    """
+    modalities = list(modality_data_dict.keys())
+    n_modalities = len(modalities)
+
+    # Initialize coherence matrix
+    coherence_matrix = np.zeros((n_modalities, n_modalities))
+    band_coherences = {}
+
+    for i, mod1 in enumerate(modalities):
+        for j, mod2 in enumerate(modalities):
+            if i == j:
+                coherence_matrix[i, j] = 1.0
+            elif i < j:
+                signal1 = modality_data_dict[mod1].flatten()
+                signal2 = modality_data_dict[mod2].flatten()
+
+                # Ensure same length
+                min_len = min(len(signal1), len(signal2))
+                signal1 = signal1[:min_len]
+                signal2 = signal2[:min_len]
+
+                # Use minimum sampling frequency
+                sfreq = min(sfreq_dict.get(mod1, 250), sfreq_dict.get(mod2, 250))
+
+                try:
+                    coh_result = TransformAnalyzer.coherence_analysis(
+                        signal1, signal2, sfreq
+                    )
+                    coherence_matrix[i, j] = coh_result['mean_coherence']
+                    coherence_matrix[j, i] = coh_result['mean_coherence']
+
+                    # Store band coherences
+                    pair_key = f"{mod1}-{mod2}"
+                    band_coherences[pair_key] = coh_result['band_coherence']
+                except:
+                    coherence_matrix[i, j] = 0
+                    coherence_matrix[j, i] = 0
+
+    return {
+        'modalities': modalities,
+        'coherence_matrix': coherence_matrix,
+        'band_coherences': band_coherences,
+        'mean_coherence': np.mean(coherence_matrix[np.triu_indices(n_modalities, k=1)])
     }
 
 

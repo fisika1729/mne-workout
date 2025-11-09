@@ -26,6 +26,12 @@ pyedflib>=0.1.30
 # Uncomment if you want to use MNE's native GUI instead of tkinter
 # pyqt5>=5.15.0
 
+# For wavelet analysis
+pywavelets>=1.4.0
+
+# Optional: For Hilbert-Huang Transform (EMD)
+# PyEMD>=1.0.0  # Empirical Mode Decomposition
+
 # For advanced analysis
 # nilearn>=0.10.0  # Brain imaging analysis
 # pyvista>=0.38.0  # 3D visualization
