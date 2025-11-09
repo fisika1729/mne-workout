@@ -1540,6 +1540,887 @@ def compare_bifurcations_cross_modal(bifurcation_results):
     }
 
 
+class FuzzySetAnalyzer:
+    """
+    Fuzzy Set Theory Analysis for Neuroimaging Data
+
+    Handles uncertainty and vagueness in bifurcation detection, state classification,
+    and cross-modal comparisons using fuzzy logic.
+    """
+
+    @staticmethod
+    def gaussian_membership(x, center, sigma):
+        """
+        Gaussian fuzzy membership function
+
+        Parameters:
+        -----------
+        x : array-like
+            Input values
+        center : float
+            Center of the Gaussian
+        sigma : float
+            Standard deviation (spread)
+
+        Returns:
+        --------
+        membership : array-like
+            Membership values [0, 1]
+        """
+        return np.exp(-((x - center) ** 2) / (2 * sigma ** 2))
+
+    @staticmethod
+    def triangular_membership(x, a, b, c):
+        """
+        Triangular fuzzy membership function
+
+        Parameters:
+        -----------
+        x : array-like
+            Input values
+        a, b, c : float
+            Left, center, and right points of triangle
+
+        Returns:
+        --------
+        membership : array-like
+            Membership values [0, 1]
+        """
+        membership = np.zeros_like(x, dtype=float)
+
+        # Left slope
+        left_mask = (x >= a) & (x < b)
+        if b != a:
+            membership[left_mask] = (x[left_mask] - a) / (b - a)
+
+        # Right slope
+        right_mask = (x >= b) & (x <= c)
+        if c != b:
+            membership[right_mask] = (c - x[right_mask]) / (c - b)
+
+        return membership
+
+    @staticmethod
+    def trapezoidal_membership(x, a, b, c, d):
+        """
+        Trapezoidal fuzzy membership function
+
+        Parameters:
+        -----------
+        x : array-like
+            Input values
+        a, b, c, d : float
+            Left start, left top, right top, right end
+
+        Returns:
+        --------
+        membership : array-like
+            Membership values [0, 1]
+        """
+        membership = np.zeros_like(x, dtype=float)
+
+        # Left slope
+        left_mask = (x >= a) & (x < b)
+        if b != a:
+            membership[left_mask] = (x[left_mask] - a) / (b - a)
+
+        # Top plateau
+        top_mask = (x >= b) & (x <= c)
+        membership[top_mask] = 1.0
+
+        # Right slope
+        right_mask = (x > c) & (x <= d)
+        if d != c:
+            membership[right_mask] = (d - x[right_mask]) / (d - c)
+
+        return membership
+
+    @staticmethod
+    def fuzzy_cmeans_clustering(data, n_clusters=3, m=2, max_iter=100, error=1e-5):
+        """
+        Fuzzy C-Means clustering for pattern detection
+
+        Parameters:
+        -----------
+        data : ndarray
+            Data to cluster (n_samples, n_features)
+        n_clusters : int
+            Number of clusters
+        m : float
+            Fuzziness parameter (m > 1, typically 2)
+        max_iter : int
+            Maximum iterations
+        error : float
+            Convergence threshold
+
+        Returns:
+        --------
+        result : dict
+            'centers': Cluster centers
+            'membership': Fuzzy membership matrix (n_samples, n_clusters)
+            'labels': Hard labels (highest membership)
+        """
+        n_samples = data.shape[0]
+
+        # Initialize random membership matrix
+        membership = np.random.rand(n_samples, n_clusters)
+        membership = membership / membership.sum(axis=1, keepdims=True)
+
+        for iteration in range(max_iter):
+            # Save old membership for convergence check
+            old_membership = membership.copy()
+
+            # Calculate cluster centers
+            um = membership ** m
+            centers = (um.T @ data) / um.sum(axis=0, keepdims=True).T
+
+            # Update membership values
+            for i in range(n_samples):
+                for j in range(n_clusters):
+                    distances = np.linalg.norm(data[i] - centers, axis=1)
+                    distances[distances == 0] = 1e-10  # Avoid division by zero
+
+                    # Fuzzy membership calculation
+                    membership[i, j] = 1.0 / np.sum(
+                        (distances[j] / distances) ** (2 / (m - 1))
+                    )
+
+            # Check convergence
+            if np.linalg.norm(membership - old_membership) < error:
+                break
+
+        # Hard labels (highest membership)
+        labels = np.argmax(membership, axis=1)
+
+        return {
+            'centers': centers,
+            'membership': membership,
+            'labels': labels,
+            'n_iterations': iteration + 1
+        }
+
+    @staticmethod
+    def fuzzy_bifurcation_detection(signal, threshold_range=(0.1, 0.5),
+                                    membership_type='gaussian'):
+        """
+        Detect bifurcations with fuzzy boundaries (handling uncertainty)
+
+        Parameters:
+        -----------
+        signal : array-like
+            Input signal (1D time series or flattened spatial data)
+        threshold_range : tuple
+            (low, high) thresholds for fuzzy membership
+        membership_type : str
+            'gaussian', 'triangular', or 'trapezoidal'
+
+        Returns:
+        --------
+        result : dict
+            'crisp_bifurcations': Traditional hard threshold bifurcations
+            'fuzzy_bifurcations': Bifurcations with membership degrees
+            'fuzzy_states': State membership over time
+            'uncertainty_map': Uncertainty at each point
+        """
+        # Calculate signal derivatives
+        signal_diff = np.abs(np.diff(signal))
+        signal_diff = np.append(signal_diff, signal_diff[-1])  # Maintain length
+
+        # Normalize to [0, 1]
+        if signal_diff.max() > 0:
+            signal_diff_norm = signal_diff / signal_diff.max()
+        else:
+            signal_diff_norm = signal_diff
+
+        low_thresh, high_thresh = threshold_range
+        mid_thresh = (low_thresh + high_thresh) / 2
+
+        # Define fuzzy membership for "high change" state
+        if membership_type == 'gaussian':
+            sigma = (high_thresh - low_thresh) / 4
+            fuzzy_membership = FuzzySetAnalyzer.gaussian_membership(
+                signal_diff_norm, mid_thresh, sigma
+            )
+        elif membership_type == 'triangular':
+            fuzzy_membership = FuzzySetAnalyzer.triangular_membership(
+                signal_diff_norm, low_thresh, mid_thresh, high_thresh
+            )
+        elif membership_type == 'trapezoidal':
+            quarter = (high_thresh - low_thresh) / 4
+            fuzzy_membership = FuzzySetAnalyzer.trapezoidal_membership(
+                signal_diff_norm,
+                low_thresh,
+                low_thresh + quarter,
+                high_thresh - quarter,
+                high_thresh
+            )
+        else:
+            raise ValueError(f"Unknown membership type: {membership_type}")
+
+        # Crisp bifurcations (traditional)
+        crisp_bifurcations = np.where(signal_diff_norm > mid_thresh)[0]
+
+        # Fuzzy bifurcations (membership > 0.5)
+        fuzzy_bifurcations = []
+        for idx in range(len(fuzzy_membership)):
+            if fuzzy_membership[idx] > 0.5:
+                fuzzy_bifurcations.append({
+                    'index': idx,
+                    'membership_degree': fuzzy_membership[idx],
+                    'certainty': 'high' if fuzzy_membership[idx] > 0.8 else 'medium'
+                })
+
+        # Calculate uncertainty (entropy of fuzzy membership)
+        uncertainty_map = -fuzzy_membership * np.log2(fuzzy_membership + 1e-10) - \
+                         (1 - fuzzy_membership) * np.log2(1 - fuzzy_membership + 1e-10)
+
+        # State classification: LOW, MEDIUM, HIGH change
+        state_memberships = {
+            'low': 1 - fuzzy_membership,
+            'high': fuzzy_membership,
+            'medium': 1 - np.abs(fuzzy_membership - 0.5) * 2  # High at 0.5, low at 0 and 1
+        }
+
+        return {
+            'crisp_bifurcations': crisp_bifurcations,
+            'fuzzy_bifurcations': fuzzy_bifurcations,
+            'fuzzy_membership': fuzzy_membership,
+            'state_memberships': state_memberships,
+            'uncertainty_map': uncertainty_map,
+            'mean_uncertainty': np.mean(uncertainty_map),
+            'high_uncertainty_indices': np.where(uncertainty_map > 0.5)[0]
+        }
+
+    @staticmethod
+    def fuzzy_similarity(signal1, signal2, method='fuzzy_correlation'):
+        """
+        Calculate fuzzy similarity between two signals
+
+        Parameters:
+        -----------
+        signal1, signal2 : array-like
+            Signals to compare
+        method : str
+            'fuzzy_correlation', 'fuzzy_distance', or 'possibility'
+
+        Returns:
+        --------
+        similarity : float
+            Fuzzy similarity measure [0, 1]
+        """
+        # Normalize signals to [0, 1]
+        s1_norm = (signal1 - signal1.min()) / (signal1.max() - signal1.min() + 1e-10)
+        s2_norm = (signal2 - signal2.min()) / (signal2.max() - signal2.min() + 1e-10)
+
+        if method == 'fuzzy_correlation':
+            # Fuzzy correlation coefficient
+            numerator = np.sum(np.minimum(s1_norm, s2_norm))
+            denominator = np.sum(np.maximum(s1_norm, s2_norm))
+            similarity = numerator / (denominator + 1e-10)
+
+        elif method == 'fuzzy_distance':
+            # Hamming distance-based similarity
+            distance = np.mean(np.abs(s1_norm - s2_norm))
+            similarity = 1 - distance
+
+        elif method == 'possibility':
+            # Possibility measure
+            intersection = np.minimum(s1_norm, s2_norm)
+            similarity = np.max(intersection)
+
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        return similarity
+
+    @staticmethod
+    def fuzzy_state_classification(signal, n_states=3):
+        """
+        Classify signal into fuzzy states (e.g., low/medium/high activity)
+
+        Parameters:
+        -----------
+        signal : array-like
+            Input signal
+        n_states : int
+            Number of fuzzy states (typically 3-5)
+
+        Returns:
+        --------
+        result : dict
+            'state_memberships': Membership for each state at each time point
+            'dominant_states': Most likely state at each time
+            'state_transitions': Fuzzy transitions between states
+        """
+        # Normalize signal
+        signal_norm = (signal - signal.min()) / (signal.max() - signal.min() + 1e-10)
+
+        # Create overlapping fuzzy states
+        state_memberships = {}
+        state_centers = np.linspace(0, 1, n_states)
+        sigma = 1.0 / (2 * n_states)  # Overlap between states
+
+        for i, center in enumerate(state_centers):
+            state_memberships[f'state_{i}'] = FuzzySetAnalyzer.gaussian_membership(
+                signal_norm, center, sigma
+            )
+
+        # Determine dominant state at each point
+        membership_matrix = np.array([state_memberships[f'state_{i}']
+                                      for i in range(n_states)])
+        dominant_states = np.argmax(membership_matrix, axis=0)
+
+        # Detect fuzzy transitions (high uncertainty = between states)
+        max_membership = np.max(membership_matrix, axis=0)
+        transition_uncertainty = 1 - max_membership
+        fuzzy_transitions = np.where(transition_uncertainty > 0.3)[0]
+
+        return {
+            'state_memberships': state_memberships,
+            'dominant_states': dominant_states,
+            'fuzzy_transitions': fuzzy_transitions,
+            'transition_uncertainty': transition_uncertainty,
+            'n_transitions': len(fuzzy_transitions)
+        }
+
+    @staticmethod
+    def fuzzy_cross_modal_comparison(modality_data_dict, metric='bifurcation_similarity'):
+        """
+        Compare multiple modalities using fuzzy similarity measures
+
+        Parameters:
+        -----------
+        modality_data_dict : dict
+            Dictionary mapping modality names to their signals/features
+        metric : str
+            'bifurcation_similarity', 'state_similarity', or 'pattern_similarity'
+
+        Returns:
+        --------
+        result : dict
+            'fuzzy_similarity_matrix': Pairwise fuzzy similarities
+            'crisp_similarity_matrix': Defuzzified (hard) similarities
+            'most_similar_pair': Modality pair with highest similarity
+            'least_similar_pair': Modality pair with lowest similarity
+        """
+        modalities = list(modality_data_dict.keys())
+        n_modalities = len(modalities)
+
+        fuzzy_sim_matrix = np.zeros((n_modalities, n_modalities))
+
+        for i, mod1 in enumerate(modalities):
+            for j, mod2 in enumerate(modalities):
+                if i == j:
+                    fuzzy_sim_matrix[i, j] = 1.0
+                elif i < j:
+                    data1 = modality_data_dict[mod1].flatten()
+                    data2 = modality_data_dict[mod2].flatten()
+
+                    # Ensure same length
+                    min_len = min(len(data1), len(data2))
+                    data1 = data1[:min_len]
+                    data2 = data2[:min_len]
+
+                    # Calculate fuzzy similarity
+                    similarity = FuzzySetAnalyzer.fuzzy_similarity(
+                        data1, data2, method='fuzzy_correlation'
+                    )
+
+                    fuzzy_sim_matrix[i, j] = similarity
+                    fuzzy_sim_matrix[j, i] = similarity
+
+        # Find most and least similar pairs
+        upper_tri_indices = np.triu_indices(n_modalities, k=1)
+        upper_tri_values = fuzzy_sim_matrix[upper_tri_indices]
+
+        max_idx = np.argmax(upper_tri_values)
+        min_idx = np.argmin(upper_tri_values)
+
+        most_similar_pair = (
+            modalities[upper_tri_indices[0][max_idx]],
+            modalities[upper_tri_indices[1][max_idx]],
+            upper_tri_values[max_idx]
+        )
+
+        least_similar_pair = (
+            modalities[upper_tri_indices[0][min_idx]],
+            modalities[upper_tri_indices[1][min_idx]],
+            upper_tri_values[min_idx]
+        )
+
+        return {
+            'modalities': modalities,
+            'fuzzy_similarity_matrix': fuzzy_sim_matrix,
+            'most_similar_pair': most_similar_pair,
+            'least_similar_pair': least_similar_pair,
+            'mean_similarity': np.mean(upper_tri_values),
+            'similarity_variance': np.var(upper_tri_values)
+        }
+
+
+# Fuzzy-Enhanced Modality-Specific Bifurcation Detection
+def detect_eeg_bifurcations_fuzzy(eeg_data, sfreq=250, use_fuzzy=True, **kwargs):
+    """
+    EEG bifurcation detection with fuzzy logic for uncertainty handling
+
+    Parameters:
+    -----------
+    eeg_data : ndarray
+        EEG data (channels x time)
+    sfreq : float
+        Sampling frequency
+    use_fuzzy : bool
+        Use fuzzy logic (True) or traditional crisp detection (False)
+    **kwargs : dict
+        Additional parameters for fuzzy detection
+
+    Returns:
+    --------
+    result : dict
+        Bifurcation results with fuzzy memberships and uncertainty maps
+    """
+    # Traditional temporal bifurcations
+    crisp_result = NonLinearAnalyzer.detect_temporal_bifurcations(
+        eeg_data, sfreq=sfreq
+    )
+
+    if not use_fuzzy:
+        return crisp_result
+
+    # Add fuzzy analysis for each channel
+    fuzzy_results = []
+    for ch_idx in range(eeg_data.shape[0]):
+        ch_signal = eeg_data[ch_idx, :]
+        fuzzy_bif = FuzzySetAnalyzer.fuzzy_bifurcation_detection(
+            ch_signal,
+            threshold_range=kwargs.get('threshold_range', (0.1, 0.5)),
+            membership_type=kwargs.get('membership_type', 'gaussian')
+        )
+        fuzzy_results.append(fuzzy_bif)
+
+    # Aggregate fuzzy bifurcations across channels
+    total_fuzzy_bifurcations = sum(len(fr['fuzzy_bifurcations']) for fr in fuzzy_results)
+    mean_uncertainty = np.mean([fr['mean_uncertainty'] for fr in fuzzy_results])
+
+    # Fuzzy state classification for global signal
+    global_signal = np.mean(eeg_data, axis=0)
+    fuzzy_states = FuzzySetAnalyzer.fuzzy_state_classification(global_signal, n_states=3)
+
+    return {
+        **crisp_result,
+        'fuzzy_bifurcations_per_channel': fuzzy_results,
+        'total_fuzzy_bifurcations': total_fuzzy_bifurcations,
+        'mean_uncertainty': mean_uncertainty,
+        'fuzzy_states': fuzzy_states,
+        'high_confidence_bifurcations': sum(
+            1 for fr in fuzzy_results
+            for fb in fr['fuzzy_bifurcations']
+            if fb['membership_degree'] > 0.8
+        )
+    }
+
+
+def detect_meg_bifurcations_fuzzy(meg_data, sfreq=1000, use_fuzzy=True, **kwargs):
+    """
+    MEG bifurcation detection with fuzzy logic
+
+    Parameters:
+    -----------
+    meg_data : ndarray
+        MEG data (channels x time)
+    sfreq : float
+        Sampling frequency
+    use_fuzzy : bool
+        Use fuzzy logic
+    **kwargs : dict
+        Additional fuzzy parameters
+
+    Returns:
+    --------
+    result : dict
+        MEG bifurcation results with fuzzy analysis
+    """
+    # Traditional MEG bifurcations
+    crisp_result = NonLinearAnalyzer.detect_meg_bifurcations(meg_data, sfreq=sfreq)
+
+    if not use_fuzzy:
+        return crisp_result
+
+    # Fuzzy analysis on global signal
+    global_signal = np.mean(meg_data, axis=0)
+    fuzzy_global = FuzzySetAnalyzer.fuzzy_bifurcation_detection(
+        global_signal,
+        threshold_range=kwargs.get('threshold_range', (0.1, 0.5)),
+        membership_type=kwargs.get('membership_type', 'gaussian')
+    )
+
+    # Fuzzy C-means clustering for spatial patterns
+    n_samples = meg_data.shape[1]
+    window_size = min(1000, n_samples // 10)
+    n_windows = n_samples // window_size
+
+    spatial_patterns = []
+    for i in range(n_windows):
+        start = i * window_size
+        end = start + window_size
+        window_mean = np.mean(meg_data[:, start:end], axis=1)
+        spatial_patterns.append(window_mean)
+
+    if len(spatial_patterns) > 3:
+        spatial_patterns_array = np.array(spatial_patterns)
+        fuzzy_clusters = FuzzySetAnalyzer.fuzzy_cmeans_clustering(
+            spatial_patterns_array,
+            n_clusters=min(3, len(spatial_patterns)),
+            m=2
+        )
+    else:
+        fuzzy_clusters = None
+
+    return {
+        **crisp_result,
+        'fuzzy_global_bifurcations': fuzzy_global,
+        'fuzzy_spatial_clusters': fuzzy_clusters,
+        'mean_uncertainty': fuzzy_global['mean_uncertainty']
+    }
+
+
+def detect_mri_bifurcations_fuzzy(mri_data, use_fuzzy=True, **kwargs):
+    """
+    MRI bifurcation detection with fuzzy logic for spatial transitions
+
+    Parameters:
+    -----------
+    mri_data : ndarray
+        MRI volume (3D or 2D)
+    use_fuzzy : bool
+        Use fuzzy logic
+    **kwargs : dict
+        Additional fuzzy parameters
+
+    Returns:
+    --------
+    result : dict
+        MRI bifurcation results with fuzzy spatial analysis
+    """
+    # Traditional spatial bifurcations
+    crisp_result = NonLinearAnalyzer.detect_spatial_bifurcations(
+        mri_data,
+        method=kwargs.get('method', 'gradient')
+    )
+
+    if not use_fuzzy:
+        return crisp_result
+
+    # Flatten for fuzzy analysis
+    mri_flat = mri_data.flatten()
+
+    # Fuzzy bifurcation detection on intensity transitions
+    fuzzy_spatial = FuzzySetAnalyzer.fuzzy_bifurcation_detection(
+        mri_flat,
+        threshold_range=kwargs.get('threshold_range', (0.1, 0.5)),
+        membership_type=kwargs.get('membership_type', 'gaussian')
+    )
+
+    # Fuzzy state classification (tissue types: CSF/Gray/White matter)
+    fuzzy_tissue_states = FuzzySetAnalyzer.fuzzy_state_classification(
+        mri_flat,
+        n_states=kwargs.get('n_tissue_states', 3)
+    )
+
+    # Fuzzy C-means for tissue segmentation
+    sample_size = min(10000, len(mri_flat))
+    sample_indices = np.random.choice(len(mri_flat), sample_size, replace=False)
+    mri_sample = mri_flat[sample_indices].reshape(-1, 1)
+
+    fuzzy_segmentation = FuzzySetAnalyzer.fuzzy_cmeans_clustering(
+        mri_sample,
+        n_clusters=kwargs.get('n_clusters', 3),
+        m=2
+    )
+
+    return {
+        **crisp_result,
+        'fuzzy_spatial_bifurcations': fuzzy_spatial,
+        'fuzzy_tissue_states': fuzzy_tissue_states,
+        'fuzzy_segmentation': fuzzy_segmentation,
+        'mean_uncertainty': fuzzy_spatial['mean_uncertainty']
+    }
+
+
+def detect_fmri_bifurcations_fuzzy(fmri_data, tr=2.0, use_fuzzy=True, **kwargs):
+    """
+    fMRI bifurcation detection with fuzzy spatio-temporal analysis
+
+    Parameters:
+    -----------
+    fmri_data : ndarray
+        fMRI data (x, y, z, time)
+    tr : float
+        Repetition time
+    use_fuzzy : bool
+        Use fuzzy logic
+    **kwargs : dict
+        Additional fuzzy parameters
+
+    Returns:
+    --------
+    result : dict
+        fMRI bifurcation results with fuzzy analysis
+    """
+    # Traditional fMRI bifurcations
+    crisp_result = NonLinearAnalyzer.detect_fmri_bifurcations(
+        fmri_data,
+        tr=tr,
+        method=kwargs.get('method', 'spatio-temporal')
+    )
+
+    if not use_fuzzy:
+        return crisp_result
+
+    # Fuzzy analysis on BOLD signal
+    global_bold = np.mean(fmri_data, axis=(0, 1, 2))
+    fuzzy_bold = FuzzySetAnalyzer.fuzzy_bifurcation_detection(
+        global_bold,
+        threshold_range=kwargs.get('threshold_range', (0.1, 0.5)),
+        membership_type=kwargs.get('membership_type', 'gaussian')
+    )
+
+    # Fuzzy state classification for activation levels
+    fuzzy_activation_states = FuzzySetAnalyzer.fuzzy_state_classification(
+        global_bold,
+        n_states=kwargs.get('n_states', 3)
+    )
+
+    # Fuzzy spatial clustering for activation patterns
+    n_timepoints = fmri_data.shape[3]
+    if n_timepoints > 5:
+        # Sample spatial patterns at different time points
+        sample_times = np.linspace(0, n_timepoints - 1, min(10, n_timepoints)).astype(int)
+        spatial_patterns = []
+
+        for t in sample_times:
+            spatial_slice = fmri_data[:, :, :, t].flatten()
+            # Subsample for efficiency
+            sample_size = min(1000, len(spatial_slice))
+            sample_indices = np.random.choice(len(spatial_slice), sample_size, replace=False)
+            spatial_patterns.append(spatial_slice[sample_indices])
+
+        spatial_patterns_array = np.array(spatial_patterns)
+        fuzzy_spatial_clusters = FuzzySetAnalyzer.fuzzy_cmeans_clustering(
+            spatial_patterns_array,
+            n_clusters=min(3, len(sample_times)),
+            m=2
+        )
+    else:
+        fuzzy_spatial_clusters = None
+
+    return {
+        **crisp_result,
+        'fuzzy_bold_bifurcations': fuzzy_bold,
+        'fuzzy_activation_states': fuzzy_activation_states,
+        'fuzzy_spatial_clusters': fuzzy_spatial_clusters,
+        'mean_uncertainty': fuzzy_bold['mean_uncertainty']
+    }
+
+
+def detect_cmri_bifurcations_fuzzy(cmri_data, use_fuzzy=True, **kwargs):
+    """
+    cMRI bifurcation detection with fuzzy logic for contrast boundaries
+
+    Parameters:
+    -----------
+    cmri_data : ndarray
+        Contrast-enhanced MRI (3D or 4D)
+    use_fuzzy : bool
+        Use fuzzy logic
+    **kwargs : dict
+        Additional fuzzy parameters
+
+    Returns:
+    --------
+    result : dict
+        cMRI bifurcation results with fuzzy contrast analysis
+    """
+    # Traditional cMRI bifurcations
+    crisp_result = NonLinearAnalyzer.detect_cmri_bifurcations(
+        cmri_data,
+        method=kwargs.get('method', 'all')
+    )
+
+    if not use_fuzzy:
+        return crisp_result
+
+    # Flatten for fuzzy analysis
+    if cmri_data.ndim == 4:
+        # 4D: temporal analysis
+        global_enhancement = np.mean(cmri_data, axis=(0, 1, 2))
+        fuzzy_enhancement = FuzzySetAnalyzer.fuzzy_bifurcation_detection(
+            global_enhancement,
+            threshold_range=kwargs.get('threshold_range', (0.1, 0.5)),
+            membership_type=kwargs.get('membership_type', 'gaussian')
+        )
+
+        # Fuzzy perfusion states
+        fuzzy_perfusion_states = FuzzySetAnalyzer.fuzzy_state_classification(
+            global_enhancement,
+            n_states=kwargs.get('n_states', 3)
+        )
+    else:
+        # 3D: spatial analysis
+        cmri_flat = cmri_data.flatten()
+        fuzzy_enhancement = FuzzySetAnalyzer.fuzzy_bifurcation_detection(
+            cmri_flat,
+            threshold_range=kwargs.get('threshold_range', (0.1, 0.5)),
+            membership_type=kwargs.get('membership_type', 'gaussian')
+        )
+        fuzzy_perfusion_states = None
+
+    # Fuzzy contrast boundary detection
+    middle_slice_idx = cmri_data.shape[2] // 2 if cmri_data.ndim >= 3 else 0
+    if cmri_data.ndim == 4:
+        middle_slice = cmri_data[:, :, middle_slice_idx, cmri_data.shape[3] // 2]
+    else:
+        middle_slice = cmri_data[:, :, middle_slice_idx] if cmri_data.ndim == 3 else cmri_data
+
+    # Fuzzy C-means for contrast regions
+    slice_flat = middle_slice.flatten()
+    sample_size = min(5000, len(slice_flat))
+    sample_indices = np.random.choice(len(slice_flat), sample_size, replace=False)
+    slice_sample = slice_flat[sample_indices].reshape(-1, 1)
+
+    fuzzy_contrast_regions = FuzzySetAnalyzer.fuzzy_cmeans_clustering(
+        slice_sample,
+        n_clusters=kwargs.get('n_clusters', 3),
+        m=2
+    )
+
+    return {
+        **crisp_result,
+        'fuzzy_enhancement_bifurcations': fuzzy_enhancement,
+        'fuzzy_perfusion_states': fuzzy_perfusion_states,
+        'fuzzy_contrast_regions': fuzzy_contrast_regions,
+        'mean_uncertainty': fuzzy_enhancement['mean_uncertainty']
+    }
+
+
+def detect_bifurcations_by_modality_fuzzy(data, modality_type, use_fuzzy=True, **kwargs):
+    """
+    Unified fuzzy bifurcation detection for all 5 modalities
+
+    Parameters:
+    -----------
+    data : ndarray
+        Neuroimaging data
+    modality_type : str
+        'EEG', 'MEG', 'MRI', 'fMRI', or 'cMRI'
+    use_fuzzy : bool
+        Use fuzzy logic (True) or traditional crisp detection (False)
+    **kwargs : dict
+        Modality-specific and fuzzy parameters
+
+    Returns:
+    --------
+    result : dict
+        Bifurcation results with optional fuzzy analysis
+    """
+    modality_type = modality_type.upper()
+
+    if modality_type == 'EEG':
+        return detect_eeg_bifurcations_fuzzy(
+            data,
+            sfreq=kwargs.get('sfreq', 250),
+            use_fuzzy=use_fuzzy,
+            **kwargs
+        )
+    elif modality_type == 'MEG':
+        return detect_meg_bifurcations_fuzzy(
+            data,
+            sfreq=kwargs.get('sfreq', 1000),
+            use_fuzzy=use_fuzzy,
+            **kwargs
+        )
+    elif modality_type == 'MRI':
+        return detect_mri_bifurcations_fuzzy(
+            data,
+            use_fuzzy=use_fuzzy,
+            **kwargs
+        )
+    elif modality_type == 'FMRI':
+        return detect_fmri_bifurcations_fuzzy(
+            data,
+            tr=kwargs.get('tr', 2.0),
+            use_fuzzy=use_fuzzy,
+            **kwargs
+        )
+    elif modality_type == 'CMRI':
+        return detect_cmri_bifurcations_fuzzy(
+            data,
+            use_fuzzy=use_fuzzy,
+            **kwargs
+        )
+    else:
+        raise ValueError(f"Unknown modality type: {modality_type}")
+
+
+def compare_bifurcations_cross_modal_fuzzy(bifurcation_results, use_fuzzy=True):
+    """
+    Cross-modal bifurcation comparison with fuzzy similarity measures
+
+    Parameters:
+    -----------
+    bifurcation_results : dict
+        Dictionary mapping modality names to their bifurcation results
+    use_fuzzy : bool
+        Use fuzzy similarity (True) or traditional correlation (False)
+
+    Returns:
+    --------
+    result : dict
+        Cross-modal comparison with fuzzy similarity matrix
+    """
+    # Traditional crisp comparison
+    crisp_comparison = compare_bifurcations_cross_modal(bifurcation_results)
+
+    if not use_fuzzy:
+        return crisp_comparison
+
+    # Extract signals for fuzzy comparison
+    modality_signals = {}
+    for modality, result in bifurcation_results.items():
+        # Try to extract a representative signal
+        if 'fuzzy_membership' in result:
+            modality_signals[modality] = result['fuzzy_membership']
+        elif 'uncertainty_map' in result:
+            modality_signals[modality] = result['uncertainty_map']
+        elif isinstance(result, dict) and 'bifurcation_indices' in result:
+            # Create a binary signal from bifurcation indices
+            signal_length = result.get('signal_length', 1000)
+            binary_signal = np.zeros(signal_length)
+            if len(result['bifurcation_indices']) > 0:
+                binary_signal[result['bifurcation_indices']] = 1
+            modality_signals[modality] = binary_signal
+        else:
+            # Fallback: create a signal from bifurcation count
+            modality_signals[modality] = np.array([result.get('total_bifurcations', 0)])
+
+    # Fuzzy cross-modal comparison
+    if len(modality_signals) > 1:
+        fuzzy_comparison = FuzzySetAnalyzer.fuzzy_cross_modal_comparison(
+            modality_signals,
+            metric='bifurcation_similarity'
+        )
+    else:
+        fuzzy_comparison = None
+
+    return {
+        **crisp_comparison,
+        'fuzzy_comparison': fuzzy_comparison,
+        'fuzzy_similarity_matrix': fuzzy_comparison['fuzzy_similarity_matrix'] if fuzzy_comparison else None,
+        'most_similar_pair_fuzzy': fuzzy_comparison['most_similar_pair'] if fuzzy_comparison else None,
+        'mean_fuzzy_similarity': fuzzy_comparison['mean_similarity'] if fuzzy_comparison else None
+    }
+
+
 def compute_all_nonlinear_metrics(x, y=None, sfreq=250):
     """
     Compute all non-linear metrics for signal(s)
